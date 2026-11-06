@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Format
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then echo "gofmt needed on:"; echo "$files"; exit 1; fi
+      - name: Verify modules
+        run: go mod verify
+      - name: Vet and test
+        run: make test
+      - name: Build and smoke test
+        run: |
+          make build VERSION=ci
+          ./jira-tui --version
+          ./jira-tui --demo PAY-142 --output-json | head -5
+
+  release-check:
+    name: release archives and installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Lint install.sh
+        run: |
+          bash -n install.sh
+          shellcheck install.sh
+      - name: Build the release archives
+        run: make dist VERSION=ci
+      - name: Install from the archives
+        run: |
+          python3 -m http.server 8765 --directory dist >/dev/null 2>&1 &
+          sleep 1
+          JIRA_TUI_BASE_URL=http://127.0.0.1:8765 INSTALL_DIR="$RUNNER_TEMP/bin" bash install.sh
+          test "$("$RUNNER_TEMP/bin/jira-tui" --version)" = "jira-tui ci"

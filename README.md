@@ -1,5 +1,7 @@
 # jira-tui
 
+[![CI](https://github.com/boutdecode/jira-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/boutdecode/jira-tui/actions/workflows/ci.yml)
+
 A TUI for Jira Cloud, built with [Charm](https://charm.land/) (Bubble Tea / Bubbles / Lip Gloss v2). Go 1.27+.
 
 ![jira-tui: Kanban view](docs/screenshot.webp)
