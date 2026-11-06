@@ -34,6 +34,9 @@ func serve(t *testing.T, status int, resp string) (*Client, *recorder) {
 
 func strp(s string) *string { return &s }
 
+// docp is a description made of the given Markdown.
+func docp(md string) *Doc { d := MarkdownToADF(md); return &d }
+
 func TestUpdateIssueSendsOnlyGivenFields(t *testing.T) {
 	c, rec := serve(t, 204, "")
 	labels := []string{"a", "b"}
@@ -54,7 +57,7 @@ func TestUpdateIssueSendsOnlyGivenFields(t *testing.T) {
 
 func TestUpdateIssueDescriptionAndClearing(t *testing.T) {
 	c, rec := serve(t, 204, "")
-	if err := c.UpdateIssue("PAY-1", FieldUpdate{Description: strp("ligne 1\nligne 2\n\npar 2")}); err != nil {
+	if err := c.UpdateIssue("PAY-1", FieldUpdate{Description: docp("ligne 1\nligne 2\n\npar 2")}); err != nil {
 		t.Fatal(err)
 	}
 	fields, _ := rec.body["fields"].(map[string]any)
@@ -66,7 +69,7 @@ func TestUpdateIssueDescriptionAndClearing(t *testing.T) {
 	}
 	// an empty text clears the description (null), an empty label list clears the labels
 	none := []string{}
-	if err := c.UpdateIssue("PAY-1", FieldUpdate{Description: strp("  \n"), Labels: &none}); err != nil {
+	if err := c.UpdateIssue("PAY-1", FieldUpdate{Description: docp("  \n"), Labels: &none}); err != nil {
 		t.Fatal(err)
 	}
 	fields, _ = rec.body["fields"].(map[string]any)
@@ -135,7 +138,7 @@ func TestAssignToAndMyself(t *testing.T) {
 func TestEditAndDeleteComment(t *testing.T) {
 	c, rec := serve(t, 200, `{}`)
 	internal := false // jsdPublic=false means internal
-	if err := c.EditComment("PAY-1", Comment{ID: "77", Public: &internal}, "texte corrigé"); err != nil {
+	if err := c.EditComment("PAY-1", Comment{ID: "77", Public: &internal}, TextToADF("texte corrigé")); err != nil {
 		t.Fatal(err)
 	}
 	if rec.method != "PUT" || rec.path != "/rest/api/3/issue/PAY-1/comment/77" {
@@ -153,7 +156,7 @@ func TestEditAndDeleteComment(t *testing.T) {
 		t.Errorf("property %v", p)
 	}
 	// unknown visibility (not a JSM project): no property
-	if err := c.EditComment("PAY-1", Comment{ID: "78"}, "x"); err != nil {
+	if err := c.EditComment("PAY-1", Comment{ID: "78"}, TextToADF("x")); err != nil {
 		t.Fatal(err)
 	}
 	if _, has := rec.body["properties"]; has {

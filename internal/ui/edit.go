@@ -71,6 +71,8 @@ type editState struct {
 	ucur  int
 	seq   int  // identifies the latest assignee search: older answers are dropped
 	ubusy bool // an assignee search is pending
+
+	mentions map[string]string // name -> account id of the text being edited (see suggest.go)
 }
 
 func newEditState() editState {
@@ -81,7 +83,7 @@ func newEditState() editState {
 	ln.SetStyles(inputStyles(ln.Styles()))
 	ar := newComment()
 	ar.Placeholder = ""
-	return editState{line: ln, area: ar}
+	return editState{line: ln, area: ar, mentions: map[string]string{}}
 }
 
 func (m Model) cmdEditMeta(key string) tea.Cmd {
@@ -141,13 +143,9 @@ func (m Model) myComments() []jira.Comment {
 	return out
 }
 
-// markdownOf returns the Markdown to edit for doc; ok is false when editing it as Markdown
-// would lose something (mentions, images, tables, colors…).
-func markdownOf(doc any) (string, bool) { return jira.ADFToMarkdown(doc) }
-
 func richReason() string {
-	return i18n.T("contenu non modifiable ici (mentions, images, tableaux…) — à modifier dans Jira (touche o)",
-		"content not editable here (mentions, images, tables…) — edit it in Jira (key o)")
+	return i18n.T("contenu non modifiable ici (images, tableaux, panneaux…) — à modifier dans Jira (touche o)",
+		"content not editable here (images, tables, panels…) — edit it in Jira (key o)")
 }
 
 func (m Model) buildEditMenu() []menuItem {
@@ -160,7 +158,7 @@ func (m Model) buildEditMenu() []menuItem {
 		return notEditable
 	}
 	descWhy := why(ed["description"])
-	if _, ok := markdownOf(f.Description); descWhy == "" && !ok {
+	if _, _, ok := m.markdownOf(f.Description); descWhy == "" && !ok {
 		descWhy = richReason()
 	}
 	prioWhy := why(ed["priority"] && len(m.ed.meta.Priorities) > 0)
@@ -174,7 +172,7 @@ func (m Model) buildEditMenu() []menuItem {
 	case len(mine) == 0:
 		editWhy = i18n.T("aucun commentaire de vous", "none of your comments")
 		delWhy = editWhy
-	case !slices.ContainsFunc(mine, func(c jira.Comment) bool { _, ok := markdownOf(c.Body); return ok }):
+	case !slices.ContainsFunc(mine, func(c jira.Comment) bool { _, _, ok := m.markdownOf(c.Body); return ok }):
 		editWhy = richReason()
 	}
 	return []menuItem{
@@ -189,6 +187,7 @@ func (m Model) buildEditMenu() []menuItem {
 }
 
 func (m *Model) closeEdit() {
+	m.closeSuggest()
 	m.ed.line.Blur()
 	m.ed.area.Blur()
 	m.ed.err = ""
@@ -218,7 +217,8 @@ func (m Model) keyEditMenu(k string) (tea.Model, tea.Cmd) {
 		case "labels":
 			cmd = m.startLine(editLabels, strings.Join(f.Labels, ", "))
 		case "desc":
-			md, _ := markdownOf(f.Description) // enabled only when editable
+			md, table, _ := m.markdownOf(f.Description) // enabled only when editable
+			m.ed.mentions = table
 			cmd = m.startArea(editDesc, md)
 		case "priority":
 			m.ed.cur = 0
@@ -320,6 +320,10 @@ func (m *Model) startArea(kind editKind, value string) tea.Cmd {
 }
 
 func (m Model) keyEditText(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	consumed, scmd := m.suggestKey(msg, &m.ed.area)
+	if consumed {
+		return m, scmd
+	}
 	switch msg.String() {
 	case "esc":
 		m.closeEdit()
@@ -330,7 +334,7 @@ func (m Model) keyEditText(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.ed.area, cmd = m.ed.area.Update(msg)
 	m.ed.err = ""
-	return m, cmd
+	return m, tea.Batch(cmd, scmd)
 }
 
 func (m Model) submitText() (tea.Model, tea.Cmd) {
@@ -338,26 +342,28 @@ func (m Model) submitText() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.ed.area.Value())
 	switch m.ed.kind {
 	case editDesc:
-		if cur, _ := markdownOf(m.detail.Fields.Description); text == strings.TrimSpace(cur) {
+		if cur, _, _ := m.markdownOf(m.detail.Fields.Description); text == strings.TrimSpace(cur) {
 			m.closeEdit()
 			return m, nil
 		}
+		body := m.converter(m.ed.mentions).ToADF(text)
 		m.closeEdit()
 		return m, m.busy(m.cmdDo(i18n.F("description de %s modifiée", "description of %s updated", key), true,
-			func() error { return m.svc.UpdateIssue(key, jira.FieldUpdate{Description: &text}) }))
+			func() error { return m.svc.UpdateIssue(key, jira.FieldUpdate{Description: &body}) }))
 	case editCommentText:
 		c := m.ed.cmt
 		switch {
 		case text == "":
 			m.ed.err = i18n.T("le commentaire ne peut pas être vide", "the comment cannot be empty")
 			return m, nil
-		case func() bool { cur, _ := markdownOf(c.Body); return text == strings.TrimSpace(cur) }():
+		case func() bool { cur, _, _ := m.markdownOf(c.Body); return text == strings.TrimSpace(cur) }():
 			m.closeEdit()
 			return m, nil
 		}
+		body := m.converter(m.ed.mentions).ToADF(text)
 		m.closeEdit()
 		return m, m.busy(m.cmdDo(i18n.F("commentaire de %s modifié", "comment on %s updated", key), true,
-			func() error { return m.svc.EditComment(key, c, text) }))
+			func() error { return m.svc.EditComment(key, c, body) }))
 	}
 	return m, nil
 }
@@ -409,12 +415,12 @@ func (m Model) keyCommentPick(k string) (tea.Model, tea.Cmd) {
 			m.ed.cmt, m.mode = c, modeCommentDelete
 			return m, nil
 		}
-		md, ok := markdownOf(c.Body)
+		md, table, ok := m.markdownOf(c.Body)
 		if !ok {
 			m.ed.err = richReason()
 			return m, nil
 		}
-		m.ed.cmt = c
+		m.ed.cmt, m.ed.mentions = c, table
 		return m, m.startArea(editCommentText, md)
 	}
 	return m, nil
@@ -589,9 +595,17 @@ func (m Model) editContent() string {
 		}
 		sb.WriteString(bold(colLav, title) + "\n\n")
 		sb.WriteString(boxStyle(colPurple).Background(colInput).BorderBackground(colInput).Render(m.ed.area.View()))
-		sb.WriteString("\n" + txt(colSub, truncate(i18n.T("Markdown : **gras** *italique* `code` [lien](url) - liste 1. liste", "Markdown: **bold** *italic* `code` [link](url) - list 1. list"), cw)))
+		if m.sg.active {
+			sb.WriteString("\n" + m.suggestView(cw, suggestWindow))
+		} else {
+			sb.WriteString("\n" + txt(colSub, truncate(i18n.T("Markdown : **gras** *italique* `code` [lien](url) · @personne · #ticket", "Markdown: **bold** *italic* `code` [link](url) · @person · #ticket"), cw)))
+		}
 		errLine()
-		hintLine(i18n.T("ctrl+s enregistrer · esc annuler", "ctrl+s save · esc cancel"))
+		if m.sg.active {
+			hintLine(i18n.T("↑/↓ choisir · enter insérer · esc fermer la liste", "↑/↓ choose · enter insert · esc close the list"))
+		} else {
+			hintLine(i18n.T("ctrl+s enregistrer · esc annuler", "ctrl+s save · esc cancel"))
+		}
 
 	case modeEditPriority:
 		sb.WriteString(bold(colLav, i18n.T("Priorité de ", "Priority of ")+key) + "\n\n")
@@ -640,7 +654,7 @@ func (m Model) editContent() string {
 			when := agoFull(c.RawDate)
 			excerpt := strings.Join(strings.Fields(jira.ADFToText(c.Body)), " ")
 			label := truncate(when+" · "+excerpt, cw-2)
-			if _, ok := markdownOf(c.Body); m.ed.pick == pickEdit && !ok {
+			if _, _, ok := m.markdownOf(c.Body); m.ed.pick == pickEdit && !ok {
 				label = truncate(label, max(cw-18, 8)) + txt(colSub, i18n.T("  (non modifiable ici)", "  (not editable here)"))
 			}
 			sb.WriteString(pick(i == m.ed.cur, label) + "\n")

@@ -228,11 +228,11 @@ func (s *Service) DoTransition(key, id string) error {
 	return fmt.Errorf(i18n.T("transition %s inconnue", "unknown transition %s"), id)
 }
 
-func (s *Service) AddComment(key, text string, internal bool) error {
+func (s *Service) AddComment(key string, body jira.Doc, internal bool) error {
 	public := !internal
 	s.comments[key] = append(s.comments[key], jira.Comment{
 		ID: s.nextCommentID(key), Author: jira.User{AccountID: "Kevin", DisplayName: "Kevin"},
-		Body: jira.MarkdownToADF(text), RawDate: time.Now().Format(layout), Public: &public,
+		Body: body, RawDate: time.Now().Format(layout), Public: &public,
 	})
 	return nil
 }
@@ -320,6 +320,39 @@ func (s *Service) SearchAssignable(key, query string) ([]jira.User, error) {
 	return out, nil
 }
 
+// customers are the Jira Service Management customers of the demo: they can be mentioned
+// but, not being Jira users, cannot be assigned.
+var customers = []string{"Julie Martin", "Paul Durand"}
+
+func (s *Service) SearchMentionable(key, query string) ([]jira.User, error) {
+	out, err := s.SearchAssignable(key, query) // the same four people can see every ticket of the demo
+	if err != nil {
+		return nil, err
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	for _, c := range customers {
+		if strings.Contains(strings.ToLower(c), q) {
+			out = append(out, jira.User{AccountID: c, DisplayName: c, AccountType: "customer"})
+		}
+	}
+	return out, nil
+}
+
+// SearchIssues filters on key and summary; without a query it returns the "recent" ones.
+func (s *Service) SearchIssues(query string) ([]jira.IssueRef, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	var out []jira.IssueRef
+	for _, is := range s.issues {
+		if q == "" || strings.Contains(strings.ToLower(is.Key+" "+is.Fields.Summary), q) {
+			out = append(out, jira.IssueRef{Key: is.Key, Summary: is.Fields.Summary})
+		}
+		if len(out) == 8 {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (s *Service) Myself() (jira.User, error) { return *user("Kevin"), nil }
 
 func (s *Service) EditMeta(key string) (jira.EditMeta, error) {
@@ -344,10 +377,10 @@ func (s *Service) UpdateIssue(key string, u jira.FieldUpdate) error {
 		is.Fields.Summary = *u.Summary
 	}
 	if u.Description != nil {
-		if strings.TrimSpace(*u.Description) == "" {
+		if c, _ := (*u.Description)["content"].([]any); len(c) == 0 {
 			is.Fields.Description = nil
 		} else {
-			is.Fields.Description = jira.MarkdownToADF(*u.Description)
+			is.Fields.Description = *u.Description
 		}
 	}
 	if u.PriorityID != nil {
@@ -365,10 +398,10 @@ func (s *Service) UpdateIssue(key string, u jira.FieldUpdate) error {
 	return nil
 }
 
-func (s *Service) EditComment(key string, c jira.Comment, text string) error {
+func (s *Service) EditComment(key string, c jira.Comment, body jira.Doc) error {
 	for i := range s.comments[key] {
 		if s.comments[key][i].ID == c.ID {
-			s.comments[key][i].Body = jira.MarkdownToADF(text)
+			s.comments[key][i].Body = body
 			return nil
 		}
 	}

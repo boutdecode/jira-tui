@@ -173,7 +173,9 @@ type Model struct {
 	trans           []jira.Transition
 	tcur            int
 	comment         textarea.Model
-	commentInternal bool // false = visible by the customer (the default)
+	commentInternal bool              // false = visible by the customer (the default)
+	cmtMentions     map[string]string // name -> account id of the mentions typed in the new comment
+	sg              suggest           // "@" / "#" picker of the text area being edited
 	boards          []jira.Board
 	bcur            int
 
@@ -213,7 +215,7 @@ func New(svc jira.Service, cfg config.Config) Model {
 		logs[i] = ti
 	}
 	return Model{
-		logIn: logs, hpd: 8, ed: newEditState(),
+		logIn: logs, hpd: 8, ed: newEditState(), cmtMentions: map[string]string{},
 		svc: svc, cfg: cfg, spin: sp, loading: 1,
 		filter: fi, jql: ji, comment: newComment(), vp: viewport.New(),
 		onlyMine: true, onlyOpen: true, rawJQL: raw,
@@ -668,6 +670,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.onEditMeta(msg)
 		return m, nil
 
+	case suggestQueryMsg:
+		return m, m.onSuggestQuery(msg)
+
+	case suggestMsg:
+		m.onSuggest(msg)
+		return m, nil
+
 	case userQueryMsg:
 		return m, m.onUserQuery(msg)
 
@@ -905,6 +914,10 @@ func (m Model) keyTransition(k string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) keyComment(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	consumed, scmd := m.suggestKey(msg, &m.comment)
+	if consumed {
+		return m, scmd
+	}
 	switch msg.String() {
 	case "esc":
 		m.comment.Blur()
@@ -919,6 +932,8 @@ func (m Model) keyComment(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		key := m.detail.Key
+		body := m.converter(m.cmtMentions).ToADF(text)
+		clear(m.cmtMentions) // the draft is gone, so are its mentions
 		m.comment.Blur()
 		m.comment.Reset()
 		m.mode = modeNormal
@@ -927,11 +942,11 @@ func (m Model) keyComment(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if internal {
 			info = i18n.F("commentaire interne ajouté à %s", "internal comment added to %s", key)
 		}
-		return m, m.busy(m.cmdDo(info, true, func() error { return m.svc.AddComment(key, text, internal) }))
+		return m, m.busy(m.cmdDo(info, true, func() error { return m.svc.AddComment(key, body, internal) }))
 	}
 	var cmd tea.Cmd
 	m.comment, cmd = m.comment.Update(msg)
-	return m, cmd
+	return m, tea.Batch(cmd, scmd)
 }
 
 func (m Model) keyBoards(k string) (tea.Model, tea.Cmd) {
@@ -1109,6 +1124,8 @@ func (m Model) hintLines() [][]string {
 	changeStatus, autos := i18n.T("changer le statut", "change status"), i18n.T("automatisations", "automations")
 	refresh := i18n.T("rafraîchir", "refresh")
 	switch {
+	case m.sg.active && (m.mode == modeComment || m.mode == modeEditText):
+		return [][]string{{hint("↑/↓", i18n.T("choisir", "choose")), hint("enter", i18n.T("insérer", "insert")), hint("esc", i18n.T("fermer la liste", "close the list"))}}
 	case m.mode == modeFilter:
 		return [][]string{{hint("↑/↓", nav), hint("enter", confirm), hint("esc", i18n.T("effacer", "clear"))}}
 	case m.mode == modeComment:

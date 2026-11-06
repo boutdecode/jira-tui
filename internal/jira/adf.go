@@ -53,6 +53,14 @@ func renderNode(sb *strings.Builder, n any, depth int) {
 		}
 	case "emoji", "inlineCard":
 		if a, ok := m["attrs"].(map[string]any); ok {
+			if u, _ := a["url"].(string); typ == "inlineCard" && strings.Contains(u, "/browse/") {
+				key := u[strings.LastIndex(u, "/browse/")+len("/browse/"):]
+				if i := strings.IndexAny(key, "?#/"); i >= 0 {
+					key = key[:i]
+				}
+				sb.WriteString(key)
+				break
+			}
 			for _, k := range []string{"text", "shortName", "url"} {
 				if t, _ := a[k].(string); t != "" {
 					sb.WriteString(t)

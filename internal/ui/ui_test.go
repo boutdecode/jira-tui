@@ -62,6 +62,14 @@ func press(t *testing.T, m Model, s string) Model {
 		k = tea.Key{Code: tea.KeyTab}
 	case "backspace":
 		k = tea.Key{Code: tea.KeyBackspace}
+	case "up":
+		k = tea.Key{Code: tea.KeyUp}
+	case "down":
+		k = tea.Key{Code: tea.KeyDown}
+	case "left":
+		k = tea.Key{Code: tea.KeyLeft}
+	case "right":
+		k = tea.Key{Code: tea.KeyRight}
 	case "ctrl+s":
 		k = tea.Key{Code: 's', Mod: tea.ModCtrl}
 	default:

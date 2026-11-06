@@ -30,9 +30,9 @@ func (s *spy) Unassign(key string) error {
 	s.calls = append(s.calls, "unassign")
 	return s.Service.Unassign(key)
 }
-func (s *spy) EditComment(key string, c jira.Comment, text string) error {
+func (s *spy) EditComment(key string, c jira.Comment, body jira.Doc) error {
 	s.calls = append(s.calls, "editcomment")
-	return s.Service.EditComment(key, c, text)
+	return s.Service.EditComment(key, c, body)
 }
 func (s *spy) DeleteComment(key, id string) error {
 	s.calls = append(s.calls, "deletecomment")
@@ -202,7 +202,7 @@ func TestEditDescription(t *testing.T) {
 // A description with a link and a list is edited as Markdown: nothing is lost.
 func TestRichDescriptionIsEditedAsMarkdown(t *testing.T) {
 	m, sp := editModel(t, "PAY-135")
-	if _, ok := markdownOf(m.detail.Fields.Description); !ok {
+	if _, _, ok := m.markdownOf(m.detail.Fields.Description); !ok {
 		t.Fatal("the demo description (link + list) must be editable as Markdown")
 	}
 	m = openEntry(t, m, itDesc)
@@ -226,7 +226,7 @@ func TestRichDescriptionIsEditedAsMarkdown(t *testing.T) {
 	if len(sp.calls) != 1 {
 		t.Fatalf("calls = %v", sp.calls)
 	}
-	md, ok := markdownOf(m.detail.Fields.Description)
+	md, _, ok := m.markdownOf(m.detail.Fields.Description)
 	if !ok || !strings.Contains(md, "[figma.com/payments](https://figma.com/payments)") || !strings.Contains(md, "- **Filtrer** par moyen de paiement") || !strings.Contains(md, "- Export CSV") {
 		t.Errorf("description after the edit: %q (ok=%v)", md, ok)
 	}
@@ -237,7 +237,7 @@ func TestRichDescriptionIsEditedAsMarkdown(t *testing.T) {
 
 func TestUnsupportedDescriptionIsNeverRewritten(t *testing.T) {
 	m, sp := editModel(t, "PAY-137") // a mention and a status lozenge
-	if _, ok := markdownOf(m.detail.Fields.Description); ok {
+	if _, _, ok := m.markdownOf(m.detail.Fields.Description); ok {
 		t.Fatal("the demo ticket should not be editable as Markdown")
 	}
 	m = press(t, m, "e")
@@ -438,12 +438,12 @@ func TestNoOwnCommentToEdit(t *testing.T) {
 
 func TestRichCommentIsNeverRewritten(t *testing.T) {
 	m, sp := editModel(t, "PAY-142")
-	// make Kevin's comment hold a mention: Markdown cannot keep it, the app must refuse to flatten it
+	// make Kevin's comment hold an image: Markdown cannot keep it, the app must refuse to flatten it
 	cs := m.detail.Fields.Comment.Comments
-	cs[2].Body = map[string]any{"type": "doc", "content": []any{map[string]any{"type": "paragraph", "content": []any{
-		map[string]any{"type": "text", "text": "voir "},
-		map[string]any{"type": "mention", "attrs": map[string]any{"id": "1", "text": "@Sofia"}},
-	}}}}
+	cs[2].Body = map[string]any{"type": "doc", "content": []any{
+		map[string]any{"type": "paragraph", "content": []any{map[string]any{"type": "text", "text": "voir la capture"}}},
+		map[string]any{"type": "mediaSingle", "content": []any{map[string]any{"type": "media", "attrs": map[string]any{"id": "1", "type": "file"}}}},
+	}}
 	m.detail.Fields.Comment.Comments = cs
 	m = press(t, m, "e")
 	m = downs(t, m, itEditComment)

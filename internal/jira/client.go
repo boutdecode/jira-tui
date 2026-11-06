@@ -3,9 +3,12 @@ package jira
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +50,8 @@ type Client struct {
 	me     string
 	meUser User
 
+	desks map[string]string // project key -> service desk id ("" = not a service desk project)
+
 	mu    sync.Mutex
 	names map[string]string
 }
@@ -64,6 +69,11 @@ func NewClient(baseURL, email, token string) *Client {
 func (c *Client) BrowseURL(key string) string { return c.base + "/browse/" + key }
 
 func (c *Client) do(method, path string, q url.Values, body, out any) error {
+	return c.doWith(method, path, q, body, out, nil)
+}
+
+// doWith is do with extra request headers.
+func (c *Client) doWith(method, path string, q url.Values, body, out any, extra map[string]string) error {
 	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -77,6 +87,9 @@ func (c *Client) do(method, path string, q url.Values, body, out any) error {
 		u += "?" + q.Encode()
 	}
 	hdr := map[string]string{"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte(c.email+":"+c.token))}
+	for k, v := range extra {
+		hdr[k] = v
+	}
 	return WithRetry(func() error { return DoRequest(c.http, method, u, hdr, payload, out) })
 }
 
@@ -144,9 +157,9 @@ func (c *Client) DoTransition(key, id string) error {
 
 // AddComment posts a comment. The Jira Service Management visibility is always sent
 // explicitly ("internal": true|false) so nothing is left to a default.
-func (c *Client) AddComment(key, text string, internal bool) error {
+func (c *Client) AddComment(key string, doc Doc, internal bool) error {
 	body := map[string]any{
-		"body": MarkdownToADF(text),
+		"body": doc,
 		"properties": []map[string]any{{
 			"key":   "sd.public.comment",
 			"value": map[string]any{"internal": internal},
@@ -216,12 +229,139 @@ func (c *Client) SearchAssignable(key, query string) ([]User, error) {
 	if err := c.do("GET", "/rest/api/3/user/assignable/search", q, nil, &res); err != nil {
 		return nil, err
 	}
-	out := res[:0]
-	for _, u := range res {
+	return realPeople(res), nil
+}
+
+// realPeople drops apps and deactivated accounts.
+func realPeople(us []User) []User {
+	out := us[:0]
+	for _, u := range us {
 		if u.AccountType == "app" || (u.Active != nil && !*u.Active) {
 			continue
 		}
 		out = append(out, u)
+	}
+	return out
+}
+
+// SearchMentionable lists who a mention can notify: the people who can see the issue and,
+// for a Jira Service Management project, its customers (they are not Jira users, so the
+// user search never finds them). A failure of the customer search is not an error: the
+// project may simply not be a service desk, or the account may not be an agent.
+func (c *Client) SearchMentionable(key, query string) ([]User, error) {
+	var res []User
+	q := url.Values{"issueKey": {key}, "query": {query}, "maxResults": {"20"}}
+	if err := c.do("GET", "/rest/api/3/user/viewissue/search", q, nil, &res); err != nil {
+		return nil, err
+	}
+	people := realPeople(res)
+	seen := map[string]bool{}
+	for _, u := range people {
+		seen[u.AccountID] = true
+	}
+	for _, cu := range c.searchCustomers(key, query) {
+		if !seen[cu.AccountID] {
+			seen[cu.AccountID] = true
+			people = append(people, cu)
+		}
+	}
+	return people, nil
+}
+
+// serviceDeskID returns the id of the service desk of the issue's project, or "" when the
+// project is not a service desk. Definitive answers are remembered; transient errors are not.
+func (c *Client) serviceDeskID(key string) string {
+	project, _, _ := strings.Cut(key, "-")
+	c.mu.Lock()
+	id, known := c.desks[project]
+	c.mu.Unlock()
+	if known {
+		return id
+	}
+	var req struct {
+		ServiceDeskID string `json:"serviceDeskId"`
+	}
+	err := c.doWith("GET", "/rest/servicedeskapi/request/"+url.PathEscape(key), nil, nil, &req, experimental)
+	var je *Error
+	switch {
+	case err == nil:
+	case errors.As(err, &je) && (je.Status == 404 || je.Status == 400 || je.Status == 403):
+		req.ServiceDeskID = "" // not a request of a service desk (or not visible to this account)
+	default:
+		return ""
+	}
+	c.mu.Lock()
+	if c.desks == nil {
+		c.desks = map[string]string{}
+	}
+	c.desks[project] = req.ServiceDeskID
+	c.mu.Unlock()
+	return req.ServiceDeskID
+}
+
+var experimental = map[string]string{"X-ExperimentalApi": "opt-in"}
+
+// searchCustomers finds the customers of the issue's service desk matching query.
+func (c *Client) searchCustomers(key, query string) []User {
+	desk := c.serviceDeskID(key)
+	if desk == "" {
+		return nil
+	}
+	var res struct {
+		Values []struct {
+			AccountID   string `json:"accountId"`
+			DisplayName string `json:"displayName"`
+			Active      *bool  `json:"active"`
+		} `json:"values"`
+	}
+	q := url.Values{"query": {query}, "limit": {"20"}}
+	if err := c.doWith("GET", "/rest/servicedeskapi/servicedesk/"+url.PathEscape(desk)+"/customer", q, nil, &res, experimental); err != nil {
+		return nil
+	}
+	var out []User
+	for _, v := range res.Values {
+		if v.AccountID == "" || v.DisplayName == "" || (v.Active != nil && !*v.Active) {
+			continue
+		}
+		out = append(out, User{AccountID: v.AccountID, DisplayName: v.DisplayName, AccountType: "customer"})
+	}
+	return out
+}
+
+var htmlTag = regexp.MustCompile(`<[^>]*>`)
+
+// SearchIssues uses Jira's issue picker: recent issues for an empty query, matches otherwise.
+func (c *Client) SearchIssues(query string) ([]IssueRef, error) {
+	var res struct {
+		Sections []struct {
+			Issues []struct {
+				Key         string `json:"key"`
+				Summary     string `json:"summary"`
+				SummaryText string `json:"summaryText"`
+			} `json:"issues"`
+		} `json:"sections"`
+	}
+	q := url.Values{"query": {query}, "showSubTasks": {"true"}}
+	if err := c.do("GET", "/rest/api/3/issue/picker", q, nil, &res); err != nil {
+		return nil, err
+	}
+	var out []IssueRef
+	seen := map[string]bool{}
+	for _, sec := range res.Sections {
+		for _, is := range sec.Issues {
+			if is.Key == "" || seen[is.Key] {
+				continue
+			}
+			seen[is.Key] = true
+			text := is.SummaryText
+			if text == "" {
+				text = html.UnescapeString(htmlTag.ReplaceAllString(is.Summary, ""))
+			}
+			out = append(out, IssueRef{Key: is.Key, Summary: text})
+		}
+	}
+	if len(out) > 15 {
+		out = out[:15]
 	}
 	return out, nil
 }
@@ -252,10 +392,10 @@ func (c *Client) UpdateIssue(key string, u FieldUpdate) error {
 		fields["summary"] = *u.Summary
 	}
 	if u.Description != nil {
-		if strings.TrimSpace(*u.Description) == "" {
+		if len(children(*u.Description)) == 0 {
 			fields["description"] = nil
 		} else {
-			fields["description"] = MarkdownToADF(*u.Description)
+			fields["description"] = *u.Description
 		}
 	}
 	if u.PriorityID != nil {
@@ -274,8 +414,8 @@ func (c *Client) UpdateIssue(key string, u FieldUpdate) error {
 	return c.do("PUT", "/rest/api/3/issue/"+url.PathEscape(key), nil, map[string]any{"fields": fields}, nil)
 }
 
-func (c *Client) EditComment(key string, cm Comment, text string) error {
-	body := map[string]any{"body": MarkdownToADF(text)}
+func (c *Client) EditComment(key string, cm Comment, doc Doc) error {
+	body := map[string]any{"body": doc}
 	if cm.Public != nil {
 		body["properties"] = []map[string]any{{
 			"key":   "sd.public.comment",

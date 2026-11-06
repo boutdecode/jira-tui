@@ -129,9 +129,18 @@ In the detail, `e` opens the edit menu: **title**, **description**, **priority**
   `*italic*`, `~~strike~~`, `` `code` ``, `[links](url)`, `- bullet` and `1. numbered` lists (nested by indenting),
   ` ``` ` code blocks, `> quotes` and `---`. A line break is a line break; a blank line starts a new paragraph. A backslash
   makes a character literal (`\*`). New comments (`c`) use the same syntax.
+- **Mentions and tickets**: in any text area (new comment, comment or description edit), typing `@` opens a **user
+  picker** and typing `#` a **ticket picker**. Keep typing to filter (the search waits for a short pause), `↑/↓` to
+  choose, `enter` or `tab` to insert, `esc` to close the list (a second `esc` leaves the editor). The text stays
+  readable (`@Sofia M.`, `#PAY-142`) and becomes a real Jira **mention** (the person is notified) or a **smart link**
+  to the ticket when saved. The picker only opens at the start of a line or after a space or punctuation, so
+  `name@example.com`, `C#` and Markdown headings (`# Title`) are left alone. Users are the people who can see the
+  ticket and, in a Jira Service Management project, its **customers** (marked "customer"; they are not Jira users,
+  so they come from the service desk API); tickets are Jira's issue picker (recent ones when nothing is typed). A `@Name` typed by hand, without the
+  picker, stays plain text. Other links are written `<https://…>`.
 - **Nothing is ever lost**: before offering a description or a comment for editing, the app converts it to Markdown
-  and back and checks that it gets exactly the same document. If it does not (mentions, images, tables, panels, colors,
-  underline, status lozenges, two paragraphs in a list item…), editing is refused with "content not editable here" and
+  and back and checks that it gets exactly the same document. If it does not (images, tables, panels, colors,
+  underline, status lozenges, emojis, two paragraphs in a list item…), editing is refused with "content not editable here" and
   you are sent to Jira (`o`). Empty paragraphs used only for spacing are dropped on save.
 
 ## Jira automations (manual rules)

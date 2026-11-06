@@ -25,7 +25,11 @@ func (m Model) viewDetail() string {
 
 	// left: scrollable panel + comment input
 	panelH := max(areaH-6, 4)
-	panel := boxStyle(colBorder).Width(leftW).Height(panelH).Render(m.vp.View())
+	panelContent := m.vp.View()
+	if m.mode == modeComment && m.sg.active {
+		panelContent = m.suggestView(max(leftW-4, 10), max(min(suggestWindow, panelH-5), 2)) // the picker takes the place of the text above the comment box
+	}
+	panel := boxStyle(colBorder).Width(leftW).Height(panelH).Render(panelContent)
 	inputBorder, label := colBorder, bold(colLav, i18n.T("Nouveau commentaire", "New comment"))
 	if m.mode == modeComment {
 		// the visibility must be unmistakable before sending

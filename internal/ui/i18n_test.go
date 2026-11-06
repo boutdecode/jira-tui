@@ -315,7 +315,7 @@ func TestEnglishEditScreens(t *testing.T) {
 	// rich content reason
 	r := press(t, open("PAY-137"), "e")
 	r = downs(t, r, itDesc)
-	if out := view(r); !strings.Contains(out, "content not editable here (mentions, images, tables…)") || !strings.Contains(out, "Jira (key o)") {
+	if out := view(r); !strings.Contains(out, "content not editable here (images, tables, panels…)") || !strings.Contains(out, "Jira (key o)") {
 		t.Errorf("rich reason:\n%s", out)
 	}
 	if out := view(openEntry(t, m, itPriority)); !strings.Contains(out, "✓") {

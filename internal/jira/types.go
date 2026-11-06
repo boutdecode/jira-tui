@@ -81,6 +81,15 @@ type Column struct {
 	StatusID []string
 }
 
+// Doc is an Atlassian Document Format document (what Jira stores for descriptions and comments).
+type Doc = map[string]any
+
+// IssueRef is an issue found by the ticket picker.
+type IssueRef struct {
+	Key     string
+	Summary string
+}
+
 // EditMeta says what can be edited on an issue (GET /issue/{key}/editmeta).
 type EditMeta struct {
 	Priorities []Named         // allowed priorities (the project's scheme)
@@ -90,7 +99,7 @@ type EditMeta struct {
 // FieldUpdate lists the fields to change; nil fields are left untouched.
 type FieldUpdate struct {
 	Summary     *string
-	Description *string // plain text; "" clears the description
+	Description *Doc // a document with no content clears the description
 	PriorityID  *string
 	Labels      *[]string
 }
@@ -102,7 +111,7 @@ type Service interface {
 	Transitions(key string) ([]Transition, error)
 	DoTransition(key, transitionID string) error
 	// AddComment posts a comment; internal=true hides it from the customer (Jira Service Management).
-	AddComment(key, text string, internal bool) error
+	AddComment(key string, body Doc, internal bool) error
 	AssignToMe(key string) error
 	Unassign(key string) error
 	// AssignTo gives the issue to accountID.
@@ -113,9 +122,13 @@ type Service interface {
 	Myself() (User, error)
 	EditMeta(key string) (EditMeta, error)
 	UpdateIssue(key string, u FieldUpdate) error
-	// EditComment replaces the text of a comment; the customer visibility (Jira Service
+	// EditComment replaces the body of a comment; the customer visibility (Jira Service
 	// Management) of c is sent again so that an edit never changes it.
-	EditComment(key string, c Comment, text string) error
+	EditComment(key string, c Comment, body Doc) error
+	// SearchMentionable returns the people who can see the issue and match query (for "@").
+	SearchMentionable(key, query string) ([]User, error)
+	// SearchIssues returns issues matching query, the recent ones when it is empty (for "#").
+	SearchIssues(query string) ([]IssueRef, error)
 	DeleteComment(key, commentID string) error
 	Boards() ([]Board, error)
 	BoardColumns(boardID int) ([]Column, error)

@@ -36,14 +36,20 @@ import (
 // make the round-trip check fail instead of vanishing.
 type mark struct{ typ, href, title string }
 
-// seg is a piece of inline content: a run of text with marks, a line break, or an
+// seg is a piece of inline content: a run of text with marks, or an atom: a line break,
+// a mention (mid = account id, mname = display name), a smart link (card = url) or an
 // unsupported node (x holds its type).
 type seg struct {
 	text  string
 	marks []mark
 	brk   bool
 	x     string
+	mid   string
+	mname string
+	card  string
 }
+
+func (s seg) atom() bool { return s.brk || s.x != "" || s.mid != "" || s.card != "" }
 
 func (m mark) key() string {
 	if m.typ == "link" {
@@ -133,6 +139,23 @@ func readInline(content []any) []seg {
 			out = append(out, seg{text: text, marks: ms})
 		case "hardBreak":
 			out = append(out, seg{brk: true})
+		case "mention":
+			a := attrsOf(n)
+			id, _ := a["id"].(string)
+			text, _ := a["text"].(string)
+			name := strings.TrimSpace(strings.TrimPrefix(text, "@"))
+			if id == "" || name == "" || strings.Contains(name, "\n") {
+				out = append(out, seg{x: "mention"})
+			} else {
+				out = append(out, seg{mid: id, mname: name})
+			}
+		case "inlineCard":
+			url, _ := attrsOf(n)["url"].(string)
+			if url == "" {
+				out = append(out, seg{x: "inlineCard"})
+			} else {
+				out = append(out, seg{card: url})
+			}
 		default:
 			out = append(out, seg{x: t})
 		}
@@ -140,19 +163,22 @@ func readInline(content []any) []seg {
 	return out
 }
 
-// unit is one character (or line break, or unsupported node) with its marks.
+// unit is one character, or one atom, with its marks.
 type unit struct {
 	r     rune
 	marks []mark
-	brk   bool
-	x     string
+	atom  *seg
 }
 
 func hasMark(u unit, key string) bool {
-	if u.brk || u.x != "" {
+	if u.atom != nil {
 		return false
 	}
-	for _, m := range u.marks {
+	return hasKey(u.marks, key)
+}
+
+func hasKey(ms []mark, key string) bool {
+	for _, m := range ms {
 		if m.key() == key {
 			return true
 		}
@@ -170,15 +196,13 @@ func without(ms []mark, key string) []mark {
 func normalize(segs []seg) []seg {
 	var us []unit
 	for _, s := range segs {
-		switch {
-		case s.brk:
-			us = append(us, unit{brk: true})
-		case s.x != "":
-			us = append(us, unit{x: s.x})
-		default:
-			for _, r := range s.text {
-				us = append(us, unit{r: r, marks: s.marks})
-			}
+		if s.atom() {
+			a := s
+			us = append(us, unit{atom: &a})
+			continue
+		}
+		for _, r := range s.text {
+			us = append(us, unit{r: r, marks: s.marks})
 		}
 	}
 	keys := map[string]bool{}
@@ -214,18 +238,15 @@ func normalize(segs []seg) []seg {
 	}
 	var out []seg
 	for _, u := range us {
-		switch {
-		case u.brk:
-			out = append(out, seg{brk: true})
-		case u.x != "":
-			out = append(out, seg{x: u.x})
-		default:
-			if n := len(out); n > 0 && !out[n-1].brk && out[n-1].x == "" && marksKey(out[n-1].marks) == marksKey(u.marks) {
-				out[n-1].text += string(u.r)
-				continue
-			}
-			out = append(out, seg{text: string(u.r), marks: u.marks})
+		if u.atom != nil {
+			out = append(out, *u.atom)
+			continue
 		}
+		if n := len(out); n > 0 && !out[n-1].atom() && marksKey(out[n-1].marks) == marksKey(u.marks) {
+			out[n-1].text += string(u.r)
+			continue
+		}
+		out = append(out, seg{text: string(u.r), marks: u.marks})
 	}
 	return out
 }
@@ -305,6 +326,10 @@ func canonInline(content []any) []any {
 			out = append(out, map[string]any{"br": true})
 		case s.x != "":
 			out = append(out, map[string]any{"x": s.x})
+		case s.mid != "":
+			out = append(out, map[string]any{"mention": s.mid, "name": s.mname})
+		case s.card != "":
+			out = append(out, map[string]any{"card": s.card})
 		default:
 			out = append(out, map[string]any{"s": s.text, "m": marksKey(s.marks)})
 		}
@@ -315,27 +340,89 @@ func canonInline(content []any) []any {
 // --------------------------------------------------------------------------------------
 // ADF -> Markdown
 
-type emitter struct{ ok bool }
+// Converter converts between ADF and Markdown. The zero value knows neither people nor
+// tickets; the two fields give it what it needs to read and write mentions and smart links.
+type Converter struct {
+	// BrowseURL returns the web address of an issue; BrowseURL("") is the common prefix.
+	// "#PAY-142" in the Markdown is a smart link to BrowseURL("PAY-142").
+	BrowseURL func(key string) string
+	// Mentions maps a display name to an account id. "@Sofia M." in the Markdown is a mention
+	// of that account when "Sofia M." is a key of this table.
+	Mentions map[string]string
+}
 
-// ADFToMarkdown returns the Markdown form of an ADF document. ok is true only when
-// editing that Markdown loses nothing: the text converts back to the same document.
+type emitter struct {
+	ok    bool
+	conv  Converter
+	names []string // every known mention name (they must not be taken for mentions when literal)
+}
+
+// ADFToMarkdown is ToMarkdown without people or tickets; a document with mentions is refused.
 func ADFToMarkdown(doc any) (md string, ok bool) {
+	md, mentions, ok := Converter{}.ToMarkdown(doc)
+	if len(mentions) > 0 {
+		return "", false
+	}
+	return md, ok
+}
+
+// collectMentions lists the mentions of a document; conflict is true when one name stands
+// for two accounts (the Markdown could not tell them apart).
+func collectMentions(n any, into map[string]string) (conflict bool) {
+	switch v := n.(type) {
+	case map[string]any:
+		if typeOf(v) == "mention" {
+			a := attrsOf(v)
+			id, _ := a["id"].(string)
+			text, _ := a["text"].(string)
+			name := strings.TrimSpace(strings.TrimPrefix(text, "@"))
+			if id != "" && name != "" {
+				if old, ok := into[name]; ok && old != id {
+					return true
+				}
+				into[name] = id
+			}
+		}
+		for _, c := range children(v) {
+			if collectMentions(c, into) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ToMarkdown returns the Markdown form of an ADF document and the table of the mentions it
+// contains (merged with c.Mentions). ok is true only when editing that Markdown loses
+// nothing: the text converts back to the same document.
+func (c Converter) ToMarkdown(doc any) (md string, mentions map[string]string, ok bool) {
+	mentions = map[string]string{}
 	if doc == nil {
-		return "", true
+		return "", mentions, true
 	}
 	d, isMap := doc.(map[string]any)
 	if !isMap || typeOf(d) != "doc" {
-		return "", false
+		return "", nil, false
 	}
-	e := &emitter{ok: true}
+	for k, v := range c.Mentions {
+		mentions[k] = v
+	}
+	if collectMentions(d, mentions) {
+		return "", nil, false
+	}
+	conv := Converter{BrowseURL: c.BrowseURL, Mentions: mentions}
+	e := &emitter{ok: true, conv: conv}
+	for n := range mentions {
+		e.names = append(e.names, n)
+	}
 	md = e.blocks(children(d))
 	if !e.ok {
-		return "", false
+		return "", nil, false
 	}
-	if canon(doc) != canon(MarkdownToADF(md)) {
-		return "", false
+	if canon(doc) != canon(conv.ToADF(md)) {
+		return "", nil, false
 	}
-	return md, true
+	return md, mentions, true
 }
 
 func (e *emitter) blocks(content []any) string {
@@ -477,13 +564,8 @@ func (e *emitter) run(segs []seg, ctx map[string]bool) string {
 	var sb strings.Builder
 	for i := 0; i < len(segs); {
 		s := segs[i]
-		if s.brk {
-			sb.WriteString("\n")
-			i++
-			continue
-		}
-		if s.x != "" {
-			e.ok = false
+		if s.atom() {
+			sb.WriteString(e.atom(s))
 			i++
 			continue
 		}
@@ -506,7 +588,7 @@ func (e *emitter) run(segs []seg, ctx map[string]bool) string {
 		}
 		switch {
 		case pick == nil:
-			sb.WriteString(escapeText(s.text, ctx["link"]))
+			sb.WriteString(escapeText(s.text, ctx["link"], e.names))
 			i++
 		case pick.typ == "code":
 			if strings.Contains(s.text, "`") {
@@ -518,7 +600,7 @@ func (e *emitter) run(segs []seg, ctx map[string]bool) string {
 			key := pick.key()
 			j := i
 			var group []seg
-			for j < len(segs) && hasMark(unit{marks: segs[j].marks, brk: segs[j].brk, x: segs[j].x}, key) {
+			for j < len(segs) && !segs[j].atom() && hasKey(segs[j].marks, key) {
 				g := segs[j]
 				g.marks = without(g.marks, key)
 				group = append(group, g)
@@ -530,6 +612,89 @@ func (e *emitter) run(segs []seg, ctx map[string]bool) string {
 		}
 	}
 	return sb.String()
+}
+
+// atom writes a line break, a mention or a smart link.
+func (e *emitter) atom(s seg) string {
+	switch {
+	case s.brk:
+		return "\n"
+	case s.mid != "":
+		if id, ok := e.conv.Mentions[s.mname]; !ok || id != s.mid {
+			e.ok = false
+		}
+		return "@" + s.mname
+	case s.card != "":
+		if e.conv.BrowseURL != nil {
+			prefix := e.conv.BrowseURL("")
+			if strings.HasPrefix(s.card, prefix) && isTicketKey(s.card[len(prefix):]) {
+				return "#" + s.card[len(prefix):]
+			}
+		}
+		if !strings.HasPrefix(s.card, "http://") && !strings.HasPrefix(s.card, "https://") || strings.ContainsAny(s.card, " \t\n<>") {
+			e.ok = false
+		}
+		return "<" + s.card + ">"
+	}
+	e.ok = false
+	return ""
+}
+
+// scanTicketKey returns the issue key at the start of s ("PAY-142"), or "" when there is none.
+func scanTicketKey(s string) string {
+	i := 0
+	if i >= len(s) || s[i] < 'A' || s[i] > 'Z' {
+		return ""
+	}
+	for i < len(s) && (s[i] >= 'A' && s[i] <= 'Z' || s[i] >= '0' && s[i] <= '9' || s[i] == '_') {
+		i++
+	}
+	if i >= len(s) || s[i] != '-' {
+		return ""
+	}
+	i++
+	j := i
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		j++
+	}
+	if j == i {
+		return ""
+	}
+	return s[:j]
+}
+
+func isTicketKey(s string) bool { return s != "" && scanTicketKey(s) == s }
+
+// ticketKeyAt is scanTicketKey for a "#" reference: the key must end the word.
+func ticketKeyAt(s string) string {
+	k := scanTicketKey(s)
+	if k == "" {
+		return ""
+	}
+	if r := runeAt(s, len(k)); isWord(r) || r == '-' {
+		return ""
+	}
+	return k
+}
+
+// autolinkEnd returns the length of the URL of an "<https://…>" at the start of s (which
+// follows the "<"), or 0.
+func autolinkEnd(s string) int {
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return 0
+	}
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '>':
+			if i > len("https://") {
+				return i
+			}
+			return 0
+		case ' ', '\t', '\n', '<':
+			return 0
+		}
+	}
+	return 0
 }
 
 func ctx2(ctx map[string]bool, typ string) map[string]bool {
@@ -570,7 +735,7 @@ func isWord(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
 
 // escapeText escapes what the Markdown parser would take for markup; text that cannot
 // be mistaken (a snake_case word, "2 * 3", a plain [WIP]) is left readable.
-func escapeText(s string, inLink bool) string {
+func escapeText(s string, inLink bool, names []string) string {
 	rs := []rune(s)
 	var b strings.Builder
 	for i, r := range rs {
@@ -593,6 +758,19 @@ func escapeText(s string, inLink bool) string {
 			esc = !((isWord(prev) && isWord(next)) || (prev == ' ' && next == ' '))
 		case '~':
 			esc = prev == '~' || next == '~'
+		case '@':
+			if !isWord(prev) {
+				rest := string(rs[i+1:])
+				for _, n := range names {
+					if strings.HasPrefix(rest, n) && !isWord(runeAt(rest, len(n))) {
+						esc = true
+					}
+				}
+			}
+		case '#':
+			esc = !isWord(prev) && ticketKeyAt(string(rs[i+1:])) != ""
+		case '<':
+			esc = autolinkEnd(string(rs[i+1:])) > 0
 		case '[':
 			esc = inLink || strings.Contains(string(rs[i+1:]), "](")
 		case ']':
@@ -643,9 +821,19 @@ func escapeLineStart(l string) string {
 // --------------------------------------------------------------------------------------
 // Markdown -> ADF
 
-// MarkdownToADF parses the dialect described at the top of the file. It never fails:
-// anything it does not recognise stays literal text.
-func MarkdownToADF(md string) map[string]any {
+// MarkdownToADF parses the dialect described at the top of the file, without people or tickets.
+func MarkdownToADF(md string) Doc { return Converter{}.ToADF(md) }
+
+// inlineCtx is what the inline parser knows about people and tickets.
+type inlineCtx struct {
+	names    []string // mention names, longest first
+	mentions map[string]string
+	browse   func(key string) string
+}
+
+// ToADF parses the dialect described at the top of the file. It never fails: anything it
+// does not recognise stays literal text.
+func (c Converter) ToADF(md string) Doc {
 	md = strings.ReplaceAll(md, "\r\n", "\n")
 	md = strings.Trim(md, "\n")
 	var lines []string
@@ -662,13 +850,24 @@ func MarkdownToADF(md string) map[string]any {
 			}
 		}
 	}
-	p := &mdParser{lines: lines}
-	return map[string]any{"type": "doc", "version": 1, "content": p.blocks()}
+	ic := &inlineCtx{mentions: c.Mentions, browse: c.BrowseURL}
+	for n := range c.Mentions {
+		ic.names = append(ic.names, n)
+	}
+	sort.Slice(ic.names, func(a, b int) bool {
+		if len(ic.names[a]) != len(ic.names[b]) {
+			return len(ic.names[a]) > len(ic.names[b])
+		}
+		return ic.names[a] < ic.names[b]
+	})
+	p := &mdParser{lines: lines, ic: ic}
+	return Doc{"type": "doc", "version": 1, "content": p.blocks()}
 }
 
 type mdParser struct {
 	lines []string
 	i     int
+	ic    *inlineCtx
 }
 
 type listLine struct {
@@ -747,7 +946,7 @@ func (p *mdParser) blocks() []any {
 		default:
 			if lvl, text, ok := headingLine(l); ok {
 				h := map[string]any{"type": "heading", "attrs": map[string]any{"level": lvl}}
-				if c := inlineNodes(text); len(c) > 0 {
+				if c := p.inlineNodes(text); len(c) > 0 {
 					h["content"] = c
 				}
 				content = append(content, h)
@@ -806,14 +1005,14 @@ func (p *mdParser) quote() map[string]any {
 	}
 	content := []any{}
 	for _, ls := range paras {
-		content = append(content, paragraphNode(strings.Join(ls, "\n")))
+		content = append(content, p.paragraphNode(strings.Join(ls, "\n")))
 	}
 	return map[string]any{"type": "blockquote", "content": content}
 }
 
-func paragraphNode(text string) map[string]any {
+func (p *mdParser) paragraphNode(text string) map[string]any {
 	n := map[string]any{"type": "paragraph"}
-	if c := inlineNodes(text); len(c) > 0 {
+	if c := p.inlineNodes(text); len(c) > 0 {
 		n["content"] = c
 	}
 	return n
@@ -829,7 +1028,7 @@ func (p *mdParser) paragraph() map[string]any {
 		ls = append(ls, l)
 		p.i++
 	}
-	return paragraphNode(strings.Join(ls, "\n"))
+	return p.paragraphNode(strings.Join(ls, "\n"))
 }
 
 func (p *mdParser) list() map[string]any {
@@ -865,7 +1064,7 @@ func (p *mdParser) list() map[string]any {
 			text = append(text, l[base+2:])
 			p.i++
 		}
-		item := []any{paragraphNode(strings.Join(text, "\n"))}
+		item := []any{p.paragraphNode(strings.Join(text, "\n"))}
 		for p.i < len(p.lines) {
 			sub, ok := parseListLine(p.lines[p.i])
 			if !ok || sub.indent <= base {
@@ -887,13 +1086,20 @@ func (p *mdParser) list() map[string]any {
 
 // --- inline ---
 
-func inlineNodes(s string) []any {
+func (p *mdParser) inlineNodes(s string) []any {
 	var segs []seg
-	parseInline(s, nil, &segs)
+	parseInline(p.ic, s, nil, &segs)
 	var out []any
 	for _, sg := range normalize(segs) {
-		if sg.brk {
+		switch {
+		case sg.brk:
 			out = append(out, map[string]any{"type": "hardBreak"})
+			continue
+		case sg.mid != "":
+			out = append(out, map[string]any{"type": "mention", "attrs": map[string]any{"id": sg.mid, "text": "@" + sg.mname}})
+			continue
+		case sg.card != "":
+			out = append(out, map[string]any{"type": "inlineCard", "attrs": map[string]any{"url": sg.card}})
 			continue
 		}
 		n := map[string]any{"type": "text", "text": sg.text}
@@ -970,7 +1176,7 @@ func unescape(s string) string {
 	return b.String()
 }
 
-func parseInline(s string, marks []mark, out *[]seg) {
+func parseInline(ic *inlineCtx, s string, marks []mark, out *[]seg) {
 	var buf strings.Builder
 	flush := func() {
 		if buf.Len() > 0 {
@@ -986,10 +1192,11 @@ func parseInline(s string, marks []mark, out *[]seg) {
 			return 0, false
 		}
 		flush()
-		parseInline(s[i+len(delim):j], with(m), out)
+		parseInline(ic, s[i+len(delim):j], with(m), out)
 		return j + len(delim), true
 	}
 
+scan:
 	for i := 0; i < len(s); {
 		c := s[i]
 		switch {
@@ -1029,6 +1236,29 @@ func parseInline(s string, marks []mark, out *[]seg) {
 				i = next
 				continue
 			}
+		case c == '@' && !isWord(runeBefore(s, i)):
+			for _, name := range ic.names {
+				if strings.HasPrefix(s[i+1:], name) && !isWord(runeAt(s, i+1+len(name))) {
+					flush()
+					*out = append(*out, seg{mid: ic.mentions[name], mname: name})
+					i += 1 + len(name)
+					continue scan
+				}
+			}
+		case c == '#' && ic.browse != nil && !isWord(runeBefore(s, i)):
+			if key := ticketKeyAt(s[i+1:]); key != "" {
+				flush()
+				*out = append(*out, seg{card: ic.browse(key)})
+				i += 1 + len(key)
+				continue
+			}
+		case c == '<':
+			if n := autolinkEnd(s[i+1:]); n > 0 {
+				flush()
+				*out = append(*out, seg{card: s[i+1 : i+1+n]})
+				i += n + 2
+				continue
+			}
 		case c == '[':
 			if j := findClose(s, i+1, "]", always); j > i+1 && j+1 < len(s) && s[j+1] == '(' {
 				k := j + 2
@@ -1042,7 +1272,7 @@ func parseInline(s string, marks []mark, out *[]seg) {
 					url := unescape(s[j+2 : k])
 					if url != "" && !strings.ContainsAny(url, " \t\n") {
 						flush()
-						parseInline(s[i+1:j], with(mark{typ: "link", href: url}), out)
+						parseInline(ic, s[i+1:j], with(mark{typ: "link", href: url}), out)
 						i = k + 1
 						continue
 					}

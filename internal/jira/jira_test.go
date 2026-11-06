@@ -118,7 +118,7 @@ func TestGiveUpOn429(t *testing.T) {
 		w.WriteHeader(429)
 	}))
 	defer srv.Close()
-	err := NewClient(srv.URL, "a", "b").AddComment("A-1", "x", false)
+	err := NewClient(srv.URL, "a", "b").AddComment("A-1", TextToADF("x"), false)
 	if err == nil || !strings.Contains(err.Error(), "429") || calls != maxRetries+1 {
 		t.Fatalf("err=%v calls=%d", err, calls)
 	}
@@ -134,7 +134,7 @@ func TestAddCommentVisibility(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&got)
 			w.WriteHeader(201)
 		}))
-		if err := NewClient(srv.URL, "a", "b").AddComment("A-1", "bonjour", internal); err != nil {
+		if err := NewClient(srv.URL, "a", "b").AddComment("A-1", TextToADF("bonjour"), internal); err != nil {
 			t.Fatal(err)
 		}
 		srv.Close()
