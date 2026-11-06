@@ -25,7 +25,11 @@ func (e *Error) Error() string {
 	case 401:
 		return i18n.T("authentification refusée (401) : vérifie JIRA_EMAIL / JIRA_TOKEN", "authentication refused (401): check JIRA_EMAIL / JIRA_TOKEN")
 	case 403:
-		return i18n.T("accès interdit (403)", "access forbidden (403)")
+		msg := i18n.T("accès interdit (403)", "access forbidden (403)")
+		if e.Message != "" {
+			msg += i18n.T(" : ", ": ") + e.Message // Jira says why (missing permission, locked issue…)
+		}
+		return msg
 	case 429:
 		if e.RetryAfter > 0 {
 			return i18n.F("trop de requêtes (429), réessaie dans %s", "too many requests (429), retry in %s", e.RetryAfter.Round(time.Second))
@@ -36,11 +40,12 @@ func (e *Error) Error() string {
 }
 
 type Client struct {
-	base  string
-	email string
-	token string
-	http  *http.Client
-	me    string
+	base   string
+	email  string
+	token  string
+	http   *http.Client
+	me     string
+	meUser User
 
 	mu    sync.Mutex
 	names map[string]string
@@ -141,7 +146,7 @@ func (c *Client) DoTransition(key, id string) error {
 // explicitly ("internal": true|false) so nothing is left to a default.
 func (c *Client) AddComment(key, text string, internal bool) error {
 	body := map[string]any{
-		"body": TextToADF(text),
+		"body": MarkdownToADF(text),
 		"properties": []map[string]any{{
 			"key":   "sd.public.comment",
 			"value": map[string]any{"internal": internal},
@@ -190,8 +195,98 @@ func (c *Client) myself() (string, error) {
 	if err := c.do("GET", "/rest/api/3/myself", nil, nil, &u); err != nil {
 		return "", err
 	}
-	c.me = u.AccountID
+	c.me, c.meUser = u.AccountID, u
 	return c.me, nil
+}
+
+// Myself returns the authenticated user (cached).
+func (c *Client) Myself() (User, error) {
+	if _, err := c.myself(); err != nil {
+		return User{}, err
+	}
+	return c.meUser, nil
+}
+
+func (c *Client) AssignTo(key, accountID string) error { return c.assign(key, accountID) }
+
+// SearchAssignable lists the users that can be assigned to the issue (real people only).
+func (c *Client) SearchAssignable(key, query string) ([]User, error) {
+	var res []User
+	q := url.Values{"issueKey": {key}, "query": {query}, "maxResults": {"20"}}
+	if err := c.do("GET", "/rest/api/3/user/assignable/search", q, nil, &res); err != nil {
+		return nil, err
+	}
+	out := res[:0]
+	for _, u := range res {
+		if u.AccountType == "app" || (u.Active != nil && !*u.Active) {
+			continue
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+func (c *Client) EditMeta(key string) (EditMeta, error) {
+	var res struct {
+		Fields map[string]struct {
+			AllowedValues []Named `json:"allowedValues"`
+		} `json:"fields"`
+	}
+	if err := c.do("GET", "/rest/api/3/issue/"+url.PathEscape(key)+"/editmeta", nil, nil, &res); err != nil {
+		return EditMeta{}, err
+	}
+	em := EditMeta{Editable: map[string]bool{}}
+	for k, f := range res.Fields {
+		em.Editable[k] = true
+		if k == "priority" {
+			em.Priorities = f.AllowedValues
+		}
+	}
+	return em, nil
+}
+
+// UpdateIssue changes the given fields only.
+func (c *Client) UpdateIssue(key string, u FieldUpdate) error {
+	fields := map[string]any{}
+	if u.Summary != nil {
+		fields["summary"] = *u.Summary
+	}
+	if u.Description != nil {
+		if strings.TrimSpace(*u.Description) == "" {
+			fields["description"] = nil
+		} else {
+			fields["description"] = MarkdownToADF(*u.Description)
+		}
+	}
+	if u.PriorityID != nil {
+		fields["priority"] = map[string]string{"id": *u.PriorityID}
+	}
+	if u.Labels != nil {
+		labels := *u.Labels
+		if labels == nil {
+			labels = []string{}
+		}
+		fields["labels"] = labels
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	return c.do("PUT", "/rest/api/3/issue/"+url.PathEscape(key), nil, map[string]any{"fields": fields}, nil)
+}
+
+func (c *Client) EditComment(key string, cm Comment, text string) error {
+	body := map[string]any{"body": MarkdownToADF(text)}
+	if cm.Public != nil {
+		body["properties"] = []map[string]any{{
+			"key":   "sd.public.comment",
+			"value": map[string]any{"internal": !*cm.Public},
+		}}
+	}
+	return c.do("PUT", "/rest/api/3/issue/"+url.PathEscape(key)+"/comment/"+url.PathEscape(cm.ID), nil, body, nil)
+}
+
+func (c *Client) DeleteComment(key, commentID string) error {
+	return c.do("DELETE", "/rest/api/3/issue/"+url.PathEscape(key)+"/comment/"+url.PathEscape(commentID), nil, nil, nil)
 }
 
 func (c *Client) assign(key string, accountID any) error {

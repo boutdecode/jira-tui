@@ -5,6 +5,9 @@ import "time"
 type User struct {
 	AccountID   string `json:"accountId"`
 	DisplayName string `json:"displayName"`
+	// Set by the user-search endpoints only (zero values elsewhere).
+	AccountType string `json:"accountType,omitempty"` // atlassian | app | customer
+	Active      *bool  `json:"active,omitempty"`
 }
 
 type Named struct {
@@ -78,6 +81,20 @@ type Column struct {
 	StatusID []string
 }
 
+// EditMeta says what can be edited on an issue (GET /issue/{key}/editmeta).
+type EditMeta struct {
+	Priorities []Named         // allowed priorities (the project's scheme)
+	Editable   map[string]bool // field keys Jira lets the user edit: summary, description, priority, labels…
+}
+
+// FieldUpdate lists the fields to change; nil fields are left untouched.
+type FieldUpdate struct {
+	Summary     *string
+	Description *string // plain text; "" clears the description
+	PriorityID  *string
+	Labels      *[]string
+}
+
 // Service is the surface the UI depends on; implemented by Client and mock.
 type Service interface {
 	Search(jql string) ([]Issue, error)
@@ -88,6 +105,18 @@ type Service interface {
 	AddComment(key, text string, internal bool) error
 	AssignToMe(key string) error
 	Unassign(key string) error
+	// AssignTo gives the issue to accountID.
+	AssignTo(key, accountID string) error
+	// SearchAssignable returns the users that can be assigned to the issue and match query.
+	SearchAssignable(key, query string) ([]User, error)
+	// Myself returns the authenticated user.
+	Myself() (User, error)
+	EditMeta(key string) (EditMeta, error)
+	UpdateIssue(key string, u FieldUpdate) error
+	// EditComment replaces the text of a comment; the customer visibility (Jira Service
+	// Management) of c is sent again so that an edit never changes it.
+	EditComment(key string, c Comment, text string) error
+	DeleteComment(key, commentID string) error
 	Boards() ([]Board, error)
 	BoardColumns(boardID int) ([]Column, error)
 	BoardIssues(boardID int) ([]Issue, error)

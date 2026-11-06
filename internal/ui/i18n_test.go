@@ -26,6 +26,8 @@ var frenchWords = []string{
 	"quitter", "aide", "naviguer", "Aucun", "résultat", "Raccourcis", "Lancer", "règle", "saisie", "Étiquettes",
 	"Temps passé", "Créé", "Mis à jour", "ouvrir", "filtrer", "rafraîchir", "statut", "tous", "ouverts", "Filtres",
 	"À faire", "En cours", "En revue", "Terminé", "Tâche", "Haute", "Moyenne", "Basse", "il y a", "Non assigné",
+	"Modifier", "Supprimer", "Titre", "Priorité", "enregistrer", "Rechercher", "utilisateur", "commentaire", "contenu riche", "contenu non modifiable", "non modifiable ici", "italique", "liste",
+	"choisir", "sélectionner", "fermer", "supprimer", "assigner", "Assigné", "recherche", "tapez", "retour",
 }
 
 // hintsOf returns the footer shortcuts of the current mode as plain text.
@@ -251,3 +253,77 @@ func TestEnglishSetupForm(t *testing.T) {
 
 // l0 opens the "add time" modal.
 func l0(t *testing.T, d Model) Model { return press(t, d, "t") }
+
+func TestEnglishEditScreens(t *testing.T) {
+	english(t)
+	sp := &spy{Service: mock.New()}
+	open := func(key string) Model {
+		return initModel(t, New(sp, config.Config{JQL: config.DefaultJQL}).OpenIssue(key))
+	}
+
+	m := open("PAY-142")
+	if h := hintsOf(m); !strings.Contains(h, "e edit") {
+		t.Errorf("detail hints: %s", h)
+	}
+	menu := press(t, m, "e")
+	out := view(menu)
+	for _, want := range []string{"Edit PAY-142", "Title", "Description", "Priority", "Labels", "Assignee", "Edit a comment", "Delete a comment", "↑/↓ choose · enter open · esc close"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("menu misses %q\n%s", want, out)
+		}
+	}
+	noFrench(t, "edit menu", out)
+
+	want := map[int][]string{
+		itTitle:       {"Title of PAY-142", "enter save · esc cancel"},
+		itDesc:        {"Description of PAY-142", "ctrl+s save · esc cancel"},
+		itPriority:    {"Priority of PAY-142", "↑/↓ choose · enter confirm · esc back"},
+		itLabels:      {"Labels of PAY-142", "separated by commas or spaces", "enter save"},
+		itAssignee:    {"Assign PAY-142", "Unassigned", "type to search · ↑/↓ choose · enter assign · esc back"},
+		itEditComment: {"Edit which comment?", "↑/↓ choose · enter select · esc back"},
+		itDelComment:  {"Delete which comment?"},
+	}
+	for idx, wants := range want {
+		sc := view(openEntry(t, m, idx))
+		for _, w := range wants {
+			if !strings.Contains(sc, w) {
+				t.Errorf("entry %d misses %q\n%s", idx, w, sc)
+			}
+		}
+		noFrench(t, "edit entry", sc)
+	}
+
+	// confirmations and errors are English too
+	t1 := openEntry(t, m, itTitle)
+	t1.ed.line.SetValue("")
+	t1 = press(t, t1, "enter")
+	if !strings.Contains(view(t1), "the title cannot be empty") {
+		t.Errorf("empty title error:\n%s", view(t1))
+	}
+	t1.ed.line.SetValue("Renamed")
+	if t1 = press(t, t1, "enter"); !strings.Contains(t1.status, "title of PAY-142 updated") {
+		t.Errorf("status = %q", t1.status)
+	}
+	d := press(t, openEntry(t, m, itDelComment), "enter")
+	if out := view(d); !strings.Contains(out, "Delete this comment?") || !strings.Contains(out, "this cannot be undone") {
+		t.Errorf("delete confirm:\n%s", out)
+	}
+	noFrench(t, "delete confirm", view(d))
+	if d = press(t, d, "enter"); !strings.Contains(d.status, "comment deleted from PAY-142") {
+		t.Errorf("status = %q", d.status)
+	}
+	// rich content reason
+	r := press(t, open("PAY-137"), "e")
+	r = downs(t, r, itDesc)
+	if out := view(r); !strings.Contains(out, "content not editable here (mentions, images, tables…)") || !strings.Contains(out, "Jira (key o)") {
+		t.Errorf("rich reason:\n%s", out)
+	}
+	if out := view(openEntry(t, m, itPriority)); !strings.Contains(out, "✓") {
+		t.Errorf("current priority should be marked:\n%s", out)
+	}
+	// no own comment
+	n := downs(t, press(t, open("PAY-139"), "e"), itEditComment)
+	if out := view(n); !strings.Contains(out, "none of your comments") {
+		t.Errorf("reason:\n%s", out)
+	}
+}

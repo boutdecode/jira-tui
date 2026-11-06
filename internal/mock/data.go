@@ -2,7 +2,10 @@
 package mock
 
 import (
+	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,6 +141,14 @@ func New() *Service {
 				"When paying with a card that requires 3DS2 authentication, the redirect to the bank ends in a 502 error and the order stays “pending”.\n\n"+
 					"1. Add an item to the cart\n2. Pay with the test card 4000 0027 6000 3184\n3. Complete the challenge in the bank window"))
 		}
+		if sd.key == "PAY-137" {
+			// a mention and a status lozenge: no Markdown can hold them, so the app refuses to edit it
+			f.Description = unsupportedDescription()
+		}
+		if sd.key == "PAY-135" {
+			// a description with a link and a list: the app must refuse to rewrite it as plain text
+			f.Description = richDescription()
+		}
 		if sd.key == "PAY-142" {
 			est := 8 * 3600
 			f.OriginalEstimate = &est
@@ -155,7 +166,7 @@ func New() *Service {
 	} {
 		public := !c.internal
 		s.comments["PAY-142"] = append(s.comments["PAY-142"], jira.Comment{
-			ID: fmt.Sprint(len(s.comments["PAY-142"]) + 1), Author: jira.User{DisplayName: c.who},
+			ID: fmt.Sprint(len(s.comments["PAY-142"]) + 1), Author: jira.User{AccountID: c.who, DisplayName: c.who},
 			Body: jira.TextToADF(c.text), RawDate: now.Add(-c.age).Format(layout), Public: &public,
 		})
 	}
@@ -220,10 +231,159 @@ func (s *Service) DoTransition(key, id string) error {
 func (s *Service) AddComment(key, text string, internal bool) error {
 	public := !internal
 	s.comments[key] = append(s.comments[key], jira.Comment{
-		ID: fmt.Sprint(len(s.comments[key]) + 1), Author: jira.User{DisplayName: "Kevin"},
-		Body: jira.TextToADF(text), RawDate: time.Now().Format(layout), Public: &public,
+		ID: s.nextCommentID(key), Author: jira.User{AccountID: "Kevin", DisplayName: "Kevin"},
+		Body: jira.MarkdownToADF(text), RawDate: time.Now().Format(layout), Public: &public,
 	})
 	return nil
+}
+
+func (s *Service) nextCommentID(key string) string {
+	next := 1
+	for _, c := range s.comments[key] {
+		if n, err := strconv.Atoi(c.ID); err == nil {
+			next = max(next, n+1)
+		}
+	}
+	return fmt.Sprint(next)
+}
+
+// richDescription has a link and a list: editable, as Markdown.
+func richDescription() map[string]any {
+	text := func(t string, marks ...any) map[string]any {
+		n := map[string]any{"type": "text", "text": t}
+		if len(marks) > 0 {
+			n["marks"] = marks
+		}
+		return n
+	}
+	item := func(t string) map[string]any {
+		return map[string]any{"type": "listItem", "content": []any{map[string]any{"type": "paragraph", "content": []any{text(t)}}}}
+	}
+	return map[string]any{"type": "doc", "version": 1, "content": []any{
+		map[string]any{"type": "paragraph", "content": []any{
+			text(i18n.T("Maquette : ", "Mockup: ")),
+			text("figma.com/payments", map[string]any{"type": "link", "attrs": map[string]any{"href": "https://figma.com/payments"}}),
+		}},
+		map[string]any{"type": "bulletList", "content": []any{
+			item(i18n.T("Filtrer par date", "Filter by date")),
+			item(i18n.T("Filtrer par moyen de paiement", "Filter by payment method")),
+		}},
+	}}
+}
+
+// unsupportedDescription is an ADF document that cannot be edited as Markdown.
+func unsupportedDescription() map[string]any {
+	return map[string]any{"type": "doc", "version": 1, "content": []any{
+		map[string]any{"type": "paragraph", "content": []any{
+			map[string]any{"type": "text", "text": i18n.T("À vérifier avec ", "To check with ")},
+			map[string]any{"type": "mention", "attrs": map[string]any{"id": "Sofia M.", "text": "@Sofia M."}},
+			map[string]any{"type": "text", "text": " "},
+			map[string]any{"type": "status", "attrs": map[string]any{"text": "BLOQUÉ", "color": "red"}},
+		}},
+	}}
+}
+
+// users are the people that can be assigned in the demo.
+var users = []string{"Kevin", "Camille R.", "Sofia M.", "Léo B."}
+
+var priorities = []jira.Named{{ID: "1", Name: "High"}, {ID: "2", Name: "Medium"}, {ID: "3", Name: "Low"}}
+
+func (s *Service) notFound(key string) error {
+	return fmt.Errorf(i18n.T("ticket %s introuvable", "ticket %s not found"), key)
+}
+
+func (s *Service) AssignTo(key, accountID string) error {
+	is := s.find(key)
+	if is == nil {
+		return s.notFound(key)
+	}
+	for _, u := range users {
+		if u == accountID {
+			is.Fields.Assignee = user(u)
+			return nil
+		}
+	}
+	return fmt.Errorf(i18n.T("utilisateur %s inconnu", "unknown user %s"), accountID)
+}
+
+func (s *Service) SearchAssignable(key, query string) ([]jira.User, error) {
+	if s.find(key) == nil {
+		return nil, s.notFound(key)
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	var out []jira.User
+	for _, u := range users {
+		if strings.Contains(strings.ToLower(u), q) {
+			out = append(out, *user(u))
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) Myself() (jira.User, error) { return *user("Kevin"), nil }
+
+func (s *Service) EditMeta(key string) (jira.EditMeta, error) {
+	if s.find(key) == nil {
+		return jira.EditMeta{}, s.notFound(key)
+	}
+	return jira.EditMeta{
+		Priorities: append([]jira.Named(nil), priorities...),
+		Editable:   map[string]bool{"summary": true, "description": true, "priority": true, "labels": true},
+	}, nil
+}
+
+func (s *Service) UpdateIssue(key string, u jira.FieldUpdate) error {
+	is := s.find(key)
+	if is == nil {
+		return s.notFound(key)
+	}
+	if u.Summary != nil {
+		if strings.TrimSpace(*u.Summary) == "" {
+			return errors.New(i18n.T("summary : le résumé est obligatoire", "summary: the summary is required"))
+		}
+		is.Fields.Summary = *u.Summary
+	}
+	if u.Description != nil {
+		if strings.TrimSpace(*u.Description) == "" {
+			is.Fields.Description = nil
+		} else {
+			is.Fields.Description = jira.MarkdownToADF(*u.Description)
+		}
+	}
+	if u.PriorityID != nil {
+		i := slices.IndexFunc(priorities, func(p jira.Named) bool { return p.ID == *u.PriorityID })
+		if i < 0 {
+			return fmt.Errorf(i18n.T("priorité %s inconnue", "unknown priority %s"), *u.PriorityID)
+		}
+		p := priorities[i]
+		is.Fields.Priority = &p
+	}
+	if u.Labels != nil {
+		is.Fields.Labels = append([]string(nil), *u.Labels...)
+	}
+	is.Fields.Updated = time.Now().Format(layout)
+	return nil
+}
+
+func (s *Service) EditComment(key string, c jira.Comment, text string) error {
+	for i := range s.comments[key] {
+		if s.comments[key][i].ID == c.ID {
+			s.comments[key][i].Body = jira.MarkdownToADF(text)
+			return nil
+		}
+	}
+	return fmt.Errorf(i18n.T("commentaire %s introuvable", "comment %s not found"), c.ID)
+}
+
+func (s *Service) DeleteComment(key, commentID string) error {
+	cs := s.comments[key]
+	for i := range cs {
+		if cs[i].ID == commentID {
+			s.comments[key] = slices.Delete(slices.Clone(cs), i, i+1)
+			return nil
+		}
+	}
+	return fmt.Errorf(i18n.T("commentaire %s introuvable", "comment %s not found"), commentID)
 }
 
 func (s *Service) AssignToMe(key string) error {

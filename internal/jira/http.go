@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -63,6 +64,9 @@ func DoRequest(hc *http.Client, method, u string, headers map[string]string, pay
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode/100 != 2 {
 		e := &Error{Status: resp.StatusCode, Message: strings.TrimSpace(string(data)), RetryAfter: -1}
+		if msg := jiraMessage(data); msg != "" {
+			e.Message = msg
+		}
 		if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil {
 			e.RetryAfter = time.Duration(s) * time.Second
 		}
@@ -75,4 +79,30 @@ func DoRequest(hc *http.Client, method, u string, headers map[string]string, pay
 		return nil
 	}
 	return json.Unmarshal(data, out)
+}
+
+// jiraMessage extracts the readable part of a Jira error body:
+// {"errorMessages":["…"],"errors":{"summary":"…"}} becomes "…; summary: …".
+func jiraMessage(data []byte) string {
+	var v struct {
+		ErrorMessages []string          `json:"errorMessages"`
+		Errors        map[string]string `json:"errors"`
+		Message       string            `json:"message"`
+	}
+	if json.Unmarshal(data, &v) != nil {
+		return ""
+	}
+	parts := append([]string(nil), v.ErrorMessages...)
+	keys := make([]string, 0, len(v.Errors))
+	for k := range v.Errors {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		parts = append(parts, k+": "+v.Errors[k])
+	}
+	if v.Message != "" {
+		parts = append(parts, v.Message)
+	}
+	return strings.Join(parts, "; ")
 }

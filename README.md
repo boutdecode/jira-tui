@@ -112,6 +112,28 @@ always show the selected visibility. Each new comment starts again as `Client`.
 Existing comments show `[client]` or `[interne]` (nothing if Jira does not say,
 for example outside Service Management).
 
+## Editing a ticket
+
+In the detail, `e` opens the edit menu: **title**, **description**, **priority**, **labels**, **assignee**,
+**edit a comment** and **delete a comment**. Each entry opens its own small form (`enter` or `ctrl+s` saves,
+`esc` cancels without touching Jira), then the ticket and the list are reloaded.
+
+- **Priority**: the choices come from Jira for this ticket (they follow the project's scheme). An entry Jira does not
+  allow to edit on this ticket is greyed out with the reason.
+- **Labels**: separated by commas or spaces (a Jira label cannot contain a space).
+- **Assignee**: type to search among the people who can be assigned to the ticket (the search waits for a short pause
+  in the typing); the first entry, "Unassigned", removes the assignee. `a` / `u` still assign to you / unassign.
+- **Comments**: only **your own** comments are offered. Editing keeps the customer / internal visibility; deleting asks
+  for a confirmation first.
+- **Markdown**: descriptions and comments are edited as Markdown, so formatting is kept: `# headings`, `**bold**`,
+  `*italic*`, `~~strike~~`, `` `code` ``, `[links](url)`, `- bullet` and `1. numbered` lists (nested by indenting),
+  ` ``` ` code blocks, `> quotes` and `---`. A line break is a line break; a blank line starts a new paragraph. A backslash
+  makes a character literal (`\*`). New comments (`c`) use the same syntax.
+- **Nothing is ever lost**: before offering a description or a comment for editing, the app converts it to Markdown
+  and back and checks that it gets exactly the same document. If it does not (mentions, images, tables, panels, colors,
+  underline, status lozenges, two paragraphs in a list item…), editing is refused with "content not editable here" and
+  you are sent to Jira (`o`). Empty paragraphs used only for spacing are dropped on save.
+
 ## Jira automations (manual rules)
 
 `x` (from the list, the kanban or the detail) lists the automations with a **"Manual" trigger** that apply to the
@@ -139,7 +161,7 @@ Three tabs, as in the mockup: `1 Liste`, `2 Kanban`, `3 Détail` (last opened ti
 | Global | `1` `2` `3` / `tab` tabs · `s` change status · `o` open in Jira · `b` choose a board · `?` help · `q` quit |
 | List | `↑/↓` · `enter` open · `/` filter (text, live; `esc` clears) · `m` assigned me/everyone · `O` open/all · `ctrl+j` JQL query · `f` config filters · `r` reload |
 | Kanban | `←/→` column · `↑/↓` card · `enter` open · `H/L` move the ticket (transition) |
-| Detail | `↑/↓` scroll · `c` comment (`tab` client/internal, `ctrl+s` sends, `esc` cancels) · `t` add time (Tempo) · `a` assign to me · `u` unassign · `esc` back |
+| Detail | `↑/↓` scroll · `c` comment (`tab` client/internal, `ctrl+s` sends, `esc` cancels) · `e` edit the ticket · `t` add time (Tempo) · `a` assign to me · `u` unassign · `esc` back |
 
 The "assigned: me" / "status: open" chips build the JQL
 (`assignee = currentUser() AND resolution = Unresolved`). A JQL typed with `ctrl+j`

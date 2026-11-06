@@ -43,6 +43,13 @@ const (
 	modeAutoList
 	modeAutoInputs
 	modeAutoConfirm
+	modeEditMenu // "e" in the detail: what to edit
+	modeEditLine // title, labels
+	modeEditText // description, comment
+	modeEditPriority
+	modeAssignee
+	modeCommentPick
+	modeCommentDelete
 	modeHelp
 )
 
@@ -159,6 +166,9 @@ type Model struct {
 	autoFocus int
 	autoErr   string
 
+	// editing the ticket (edit.go)
+	ed editState
+
 	// modals
 	trans           []jira.Transition
 	tcur            int
@@ -203,7 +213,7 @@ func New(svc jira.Service, cfg config.Config) Model {
 		logs[i] = ti
 	}
 	return Model{
-		logIn: logs, hpd: 8,
+		logIn: logs, hpd: 8, ed: newEditState(),
 		svc: svc, cfg: cfg, spin: sp, loading: 1,
 		filter: fi, jql: ji, comment: newComment(), vp: viewport.New(),
 		onlyMine: true, onlyOpen: true, rawJQL: raw,
@@ -654,6 +664,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case editMetaMsg:
+		m.onEditMeta(msg)
+		return m, nil
+
+	case userQueryMsg:
+		return m, m.onUserQuery(msg)
+
+	case usersMsg:
+		m.onUsers(msg)
+		return m, nil
+
 	case boardsMsg:
 		m.loading--
 		if msg.err != nil {
@@ -699,6 +720,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.comment, cmd = m.comment.Update(msg)
 	case modeLog:
 		m.logIn[m.logFocus], cmd = m.logIn[m.logFocus].Update(msg)
+	case modeEditLine, modeAssignee:
+		m.ed.line, cmd = m.ed.line.Update(msg)
+	case modeEditText:
+		m.ed.area, cmd = m.ed.area.Update(msg)
 	}
 	return m, cmd
 }
@@ -729,6 +754,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.keyAutoInputs(msg)
 	case modeAutoConfirm:
 		return m.keyAutoConfirm(k)
+	case modeEditMenu:
+		return m.keyEditMenu(k)
+	case modeEditLine:
+		return m.keyEditLine(msg)
+	case modeEditText:
+		return m.keyEditText(msg)
+	case modeEditPriority:
+		return m.keyEditPriority(k)
+	case modeAssignee:
+		return m.keyAssignee(msg)
+	case modeCommentPick:
+		return m.keyCommentPick(k)
+	case modeCommentDelete:
+		return m.keyCommentDelete(k)
 	case modeHelp:
 		m.mode = modeNormal
 		return m, nil
@@ -972,6 +1011,8 @@ func (m Model) keyDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.busy(m.cmdDo(i18n.F("%s assigné à vous", "%s assigned to you", key), true, func() error { return m.svc.AssignToMe(key) }))
 	case "u":
 		return m, m.busy(m.cmdDo(i18n.F("%s désassigné", "%s unassigned", key), true, func() error { return m.svc.Unassign(key) }))
+	case "e":
+		return m, m.startEdit()
 	case "t":
 		if m.tsvc == nil {
 			m.setErr(errors.New(noTempoMsg()))
@@ -1009,7 +1050,8 @@ func (m Model) View() tea.View {
 	}
 	screen := lipgloss.JoinVertical(lipgloss.Left, m.header(), fit(body, m.bodyH()), m.footer())
 	switch m.mode {
-	case modeJQL, modeFilters, modeTransition, modeBoards, modeLog, modeAutoList, modeAutoInputs, modeAutoConfirm, modeHelp:
+	case modeJQL, modeFilters, modeTransition, modeBoards, modeLog, modeAutoList, modeAutoInputs, modeAutoConfirm,
+		modeEditMenu, modeEditLine, modeEditText, modeEditPriority, modeAssignee, modeCommentPick, modeCommentDelete, modeHelp:
 		screen = lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center,
 			boxStyle(colPurple).Render(m.modalContent()),
 			lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(colBorder)))
@@ -1079,10 +1121,20 @@ func (m Model) hintLines() [][]string {
 		return [][]string{{hint("tab", next), hint("enter", confirm), hint("esc", back)}}
 	case m.mode == modeAutoConfirm:
 		return [][]string{{hint("enter", i18n.T("lancer", "run")), hint("esc", back)}}
+	case m.mode == modeEditMenu, m.mode == modeEditPriority, m.mode == modeCommentPick:
+		return [][]string{{hint("↑/↓", i18n.T("choisir", "choose")), hint("enter", i18n.T("sélectionner", "select")), hint("esc", back)}}
+	case m.mode == modeEditLine:
+		return [][]string{{hint("enter", i18n.T("enregistrer", "save")), hint("esc", cancel)}}
+	case m.mode == modeEditText:
+		return [][]string{{hint("ctrl+s", i18n.T("enregistrer", "save")), hint("esc", cancel)}}
+	case m.mode == modeAssignee:
+		return [][]string{{hint("↑/↓", i18n.T("choisir", "choose")), hint("enter", i18n.T("assigner", "assign")), hint("esc", back)}}
+	case m.mode == modeCommentDelete:
+		return [][]string{{hint("enter", i18n.T("supprimer", "delete")), hint("esc", back)}}
 	case m.view == viewDetail:
 		return [][]string{
 			{hint("↑/↓", i18n.T("défiler", "scroll")), hint("c", i18n.T("commenter", "comment")), hint("ctrl+s", send), hint("esc", back), hint("q", quit), hint("?", help)},
-			{hint("t", i18n.T("ajouter du temps", "add time")), hint("s", changeStatus), hint("x", autos), hint("a", i18n.T("m'assigner", "assign to me")), hint("u", i18n.T("désassigner", "unassign")), hint("o", jiraOpen), hint("r", i18n.T("recharger", "reload"))},
+			{hint("e", i18n.T("modifier", "edit")), hint("t", i18n.T("ajouter du temps", "add time")), hint("s", changeStatus), hint("x", autos), hint("a", i18n.T("m'assigner", "assign to me")), hint("u", i18n.T("désassigner", "unassign")), hint("o", jiraOpen), hint("r", i18n.T("recharger", "reload"))},
 		}
 	case m.view == viewBoard:
 		return [][]string{
@@ -1198,6 +1250,8 @@ func (m Model) modalContent() string {
 		sb.WriteString(m.logContent())
 	case modeAutoList, modeAutoInputs, modeAutoConfirm:
 		sb.WriteString(m.autoContent())
+	case modeEditMenu, modeEditLine, modeEditText, modeEditPriority, modeAssignee, modeCommentPick, modeCommentDelete:
+		sb.WriteString(m.editContent())
 	case modeHelp:
 		sb.WriteString(helpText())
 	}
@@ -1215,6 +1269,7 @@ func helpText() string {
  Kanban   ←/→ colonne · ↑/↓ carte · H/L déplacer le ticket
  Auto.    x automatisations du ticket (liste, kanban, détail) : choisir, confirmer
  Détail   ↑/↓ défiler · c commenter (tab client/interne, ctrl+s envoie) · t ajouter du temps (Tempo)
+          e modifier (titre, description, priorité, étiquettes, assigné, commentaires)
           a m'assigner
           u désassigner · r recharger · esc retour
 `, `
@@ -1227,6 +1282,7 @@ func helpText() string {
  Kanban   ←/→ column · ↑/↓ card · H/L move the ticket
  Auto.    x ticket automations (list, kanban, detail): choose, confirm
  Detail   ↑/↓ scroll · c comment (tab customer/internal, ctrl+s sends) · t add time (Tempo)
+          e edit (title, description, priority, labels, assignee, comments)
           a assign to me
           u unassign · r reload · esc back
 `)
