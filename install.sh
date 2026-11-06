@@ -126,7 +126,9 @@ make_icns() {
   local svg="$1" out="$2" work
   work="$(mktemp -d)" || return 1
   if qlmanage -t -s 1024 -o "$work" "$svg" >/dev/null 2>&1 && [ -f "$work/$(basename "$svg").png" ]; then
-    local png="$work/$(basename "$svg").png" set="$work/AppIcon.iconset" sz
+    local png set sz
+    png="$work/$(basename "$svg").png"
+    set="$work/AppIcon.iconset"
     mkdir -p "$set"
     for sz in 16 32 128 256 512; do
       sips -z "$sz" "$sz" "$png" --out "$set/icon_${sz}x${sz}.png" >/dev/null 2>&1 || true
