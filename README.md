@@ -16,7 +16,11 @@ The script downloads the binary for your system (Linux or macOS, amd64 or arm64)
 
     curl -fsSL https://raw.githubusercontent.com/boutdecode/jira-tui/main/install.sh | JIRA_TUI_VERSION=v1.0.0 INSTALL_DIR=$HOME/bin bash
 
-Check with `jira-tui --version`. To uninstall, delete the binary. To build from source instead: `make build` (Go 1.27+).
+The script also adds jira-tui to the application menu, with its own icon: a launcher in
+`~/.local/share/applications/jira-tui.desktop` on Linux (it opens a terminal running jira-tui), or
+`~/Applications/jira-tui.app` on macOS (Launchpad / Spotlight, opens Terminal). Set `JIRA_TUI_NO_MENU=1` to skip it.
+
+Check with `jira-tui --version`. To uninstall, delete the binary and the menu entry (and `~/.local/share/icons/hicolor/scalable/apps/jira-tui.svg` on Linux). To build from source instead: `make build` (Go 1.27+).
 
 ### Publishing a release
 

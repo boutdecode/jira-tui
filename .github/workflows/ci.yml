@@ -58,5 +58,6 @@ jobs:
         run: |
           python3 -m http.server 8765 --directory dist >/dev/null 2>&1 &
           sleep 1
-          JIRA_TUI_BASE_URL=http://127.0.0.1:8765 INSTALL_DIR="$RUNNER_TEMP/bin" bash install.sh
+          JIRA_TUI_BASE_URL=http://127.0.0.1:8765 INSTALL_DIR="$RUNNER_TEMP/bin" XDG_DATA_HOME="$RUNNER_TEMP/share" bash install.sh
           test "$("$RUNNER_TEMP/bin/jira-tui" --version)" = "jira-tui ci"
+          grep -q "^Exec=\"$RUNNER_TEMP/bin/jira-tui\"$" "$RUNNER_TEMP/share/applications/jira-tui.desktop"
