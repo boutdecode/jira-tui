@@ -21,6 +21,9 @@ import (
 	"github.com/kevin/jira-tui/internal/ui"
 )
 
+// version is set at build time: -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
 func main() {
 	i18n.Set(i18n.Detect(os.Getenv))
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -39,6 +42,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, errLabel(), err)
 		fmt.Fprintln(stderr, i18n.T("Aide : jira-tui -h", "Help: jira-tui -h"))
 		return 2
+	}
+	if o.version {
+		fmt.Fprintln(stdout, "jira-tui", version)
+		return 0
 	}
 	cfg, err := config.Load(o.config)
 	if err != nil {

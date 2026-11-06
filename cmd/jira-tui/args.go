@@ -15,6 +15,7 @@ type options struct {
 	demo        bool
 	transparent bool
 	outputJSON  bool
+	version     bool
 	ref         string // normalized ticket key, "" if none
 }
 
@@ -25,6 +26,7 @@ func newFlagSet(o *options) *flag.FlagSet {
 	fs.BoolVar(&o.demo, "demo", false, i18n.T("données factices, sans réseau", "fake data, no network"))
 	fs.BoolVar(&o.transparent, "transparent", false, i18n.T("fond transparent (garde le fond du terminal)", "transparent background (keeps the terminal background)"))
 	fs.BoolVar(&o.outputJSON, "output-json", false, i18n.T("affiche le ticket en JSON sur la sortie standard (sans interface) ; exige une référence", "print the ticket as JSON on standard output (no UI); requires a reference"))
+	fs.BoolVar(&o.version, "version", false, i18n.T("affiche la version et quitte", "print the version and exit"))
 	return fs
 }
 
@@ -43,6 +45,9 @@ func parseArgs(args []string) (options, error) {
 		}
 		pos = append(pos, fs.Arg(0))
 		args = fs.Args()[1:]
+	}
+	if o.version {
+		return o, nil
 	}
 	switch {
 	case len(pos) > 1:

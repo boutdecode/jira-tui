@@ -42,3 +42,14 @@ func TestEnglishCLI(t *testing.T) {
 		t.Errorf("unknown (%d): %s", code, stderr)
 	}
 }
+
+func TestVersion(t *testing.T) {
+	code, stdout, stderr := runCLI("--version")
+	if code != 0 || strings.TrimSpace(stdout) != "jira-tui "+version || stderr != "" {
+		t.Errorf("--version = %d %q %q", code, stdout, stderr)
+	}
+	// no configuration needed, and no reference required
+	if code, _, _ := runCLI("--version", "--output-json"); code != 0 {
+		t.Errorf("--version with --output-json = %d", code)
+	}
+}

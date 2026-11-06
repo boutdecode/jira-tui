@@ -1,0 +1,26 @@
+name: Release
+
+# Push a tag such as v1.0.0 to publish the binaries used by install.sh.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: make test
+      - name: Build archives
+        run: make dist VERSION=${{ github.ref_name }}
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" dist/*.tar.gz dist/checksums.txt --title "${{ github.ref_name }}" --generate-notes

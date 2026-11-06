@@ -2,6 +2,27 @@
 
 A TUI for Jira Cloud, built with [Charm](https://charm.land/) (Bubble Tea / Bubbles / Lip Gloss v2). Go 1.27+.
 
+![jira-tui: Kanban view](docs/screenshot.webp)
+
+## Install
+
+    curl -fsSL https://raw.githubusercontent.com/boutdecode/jira-tui/main/install.sh | bash
+
+The script downloads the binary for your system (Linux or macOS, amd64 or arm64) from the
+[GitHub releases](https://github.com/boutdecode/jira-tui/releases), checks its SHA-256 checksum and installs it in
+`/usr/local/bin` (or `~/.local/bin` when that one is not writable). Options, as environment variables:
+
+    curl -fsSL https://raw.githubusercontent.com/boutdecode/jira-tui/main/install.sh | JIRA_TUI_VERSION=v1.0.0 INSTALL_DIR=$HOME/bin bash
+
+Check with `jira-tui --version`. To uninstall, delete the binary. To build from source instead: `make build` (Go 1.27+).
+
+### Publishing a release
+
+Push a tag: the `Release` GitHub Action runs the tests, builds the four archives with `make dist` and attaches them,
+with `checksums.txt`, to a new GitHub release (which is what `install.sh` downloads).
+
+    git tag v1.0.0 && git push origin v1.0.0
+
 ## Running
 
     make demo        # fake data, no network
