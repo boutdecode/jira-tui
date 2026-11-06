@@ -28,6 +28,7 @@ var frenchWords = []string{
 	"À faire", "En cours", "En revue", "Terminé", "Tâche", "Haute", "Moyenne", "Basse", "il y a", "Non assigné",
 	"Modifier", "Supprimer", "Titre", "Priorité", "enregistrer", "Rechercher", "utilisateur", "commentaire", "contenu riche", "contenu non modifiable", "non modifiable ici", "italique", "liste",
 	"choisir", "sélectionner", "fermer", "supprimer", "assigner", "Assigné", "recherche", "tapez", "retour",
+	"Nouveau ticket", "Projet", "Automatique", "brouillon", "Abandonner", "créer", "champ obligatoire", "Résumé du ticket", "sous-tâche", "défaut du projet",
 }
 
 // hintsOf returns the footer shortcuts of the current mode as plain text.

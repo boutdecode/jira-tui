@@ -192,3 +192,26 @@ func TestReadableJiraErrors(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// serveRoutes answers each path with its own body and records the JSON body received on it.
+func serveRoutes(t *testing.T, routes map[string]string) (*Client, map[string]map[string]any) {
+	t.Helper()
+	got := map[string]map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &body)
+		}
+		got[r.URL.Path] = body
+		resp, ok := routes[r.URL.Path]
+		if !ok {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+			return
+		}
+		_, _ = w.Write([]byte(resp))
+	}))
+	t.Cleanup(srv.Close)
+	return NewClient(srv.URL, "me@x.io", "tok"), got
+}

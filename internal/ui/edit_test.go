@@ -15,7 +15,18 @@ import (
 // spy records the write calls on top of the in-memory Jira.
 type spy struct {
 	*mock.Service
-	calls []string
+	calls     []string
+	created   []jira.NewIssue // what CreateIssue received
+	createErr error           // makes CreateIssue fail
+}
+
+func (s *spy) CreateIssue(in jira.NewIssue) (jira.IssueRef, error) {
+	s.calls = append(s.calls, "create")
+	s.created = append(s.created, in)
+	if s.createErr != nil {
+		return jira.IssueRef{}, s.createErr
+	}
+	return s.Service.CreateIssue(in)
 }
 
 func (s *spy) UpdateIssue(key string, u jira.FieldUpdate) error {

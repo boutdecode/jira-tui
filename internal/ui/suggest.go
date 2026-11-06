@@ -54,9 +54,13 @@ func (s suggest) count() int {
 }
 
 func (m Model) cmdSuggest(kind byte, query string, seq int) tea.Cmd {
-	svc, key := m.svc, m.detail.Key
+	svc, key, project, creating := m.svc, m.detail.Key, m.cr.project.Key, m.mode == modeCreate
 	return func() tea.Msg {
 		if kind == '@' {
+			if creating { // the issue does not exist yet: the people of the project
+				us, err := svc.SearchProjectUsers(project, query)
+				return suggestMsg{seq: seq, users: us, err: err}
+			}
 			us, err := svc.SearchMentionable(key, query)
 			return suggestMsg{seq: seq, users: us, err: err}
 		}
@@ -69,8 +73,11 @@ func (m *Model) closeSuggest() { m.sg = suggest{seq: m.sg.seq + 1} } // the new 
 
 // mentionTable is the name -> account id table of the text area being edited.
 func (m Model) mentionTable() map[string]string {
-	if m.mode == modeComment {
+	switch m.mode {
+	case modeComment:
 		return m.cmtMentions
+	case modeCreate:
+		return m.cr.mentions
 	}
 	return m.ed.mentions
 }

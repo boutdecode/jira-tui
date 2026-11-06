@@ -50,6 +50,7 @@ const (
 	modeAssignee
 	modeCommentPick
 	modeCommentDelete
+	modeCreate // "n": the form that creates an issue
 	modeHelp
 )
 
@@ -169,6 +170,10 @@ type Model struct {
 	// editing the ticket (edit.go)
 	ed editState
 
+	// creating a ticket (create.go)
+	cr          createState
+	lastProject string // project key of the last ticket created in this session
+
 	// modals
 	trans           []jira.Transition
 	tcur            int
@@ -215,7 +220,7 @@ func New(svc jira.Service, cfg config.Config) Model {
 		logs[i] = ti
 	}
 	return Model{
-		logIn: logs, hpd: 8, ed: newEditState(), cmtMentions: map[string]string{},
+		logIn: logs, hpd: 8, ed: newEditState(), cr: newCreateState(), cmtMentions: map[string]string{},
 		svc: svc, cfg: cfg, spin: sp, loading: 1,
 		filter: fi, jql: ji, comment: newComment(), vp: viewport.New(),
 		onlyMine: true, onlyOpen: true, rawJQL: raw,
@@ -670,6 +675,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.onEditMeta(msg)
 		return m, nil
 
+	case createTypesMsg:
+		return m, m.onCreateTypes(msg)
+
+	case createMetaMsg:
+		m.onCreateMeta(msg)
+		return m, nil
+
+	case projectsMsg:
+		m.onProjects(msg)
+		return m, nil
+
+	case projectQueryMsg:
+		return m, m.onProjectQuery(msg)
+
+	case createdMsg:
+		return m, m.onCreated(msg)
+
 	case suggestQueryMsg:
 		return m, m.onSuggestQuery(msg)
 
@@ -733,6 +755,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ed.line, cmd = m.ed.line.Update(msg)
 	case modeEditText:
 		m.ed.area, cmd = m.ed.area.Update(msg)
+	case modeCreate:
+		switch {
+		case m.cr.picking:
+			m.cr.pquery, cmd = m.cr.pquery.Update(msg)
+		case m.cr.focus == fTitle:
+			m.cr.title, cmd = m.cr.title.Update(msg)
+		case m.cr.focus == fDesc:
+			m.cr.desc, cmd = m.cr.desc.Update(msg)
+		case m.cr.focus == fLabels:
+			m.cr.labels, cmd = m.cr.labels.Update(msg)
+		}
 	}
 	return m, cmd
 }
@@ -777,6 +810,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.keyCommentPick(k)
 	case modeCommentDelete:
 		return m.keyCommentDelete(k)
+	case modeCreate:
+		return m.keyCreate(msg)
 	case modeHelp:
 		m.mode = modeNormal
 		return m, nil
@@ -817,6 +852,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "x":
 		return m, m.startAutomations()
+	case "n":
+		return m, m.startCreate()
 	}
 
 	switch m.view {
@@ -1066,7 +1103,7 @@ func (m Model) View() tea.View {
 	screen := lipgloss.JoinVertical(lipgloss.Left, m.header(), fit(body, m.bodyH()), m.footer())
 	switch m.mode {
 	case modeJQL, modeFilters, modeTransition, modeBoards, modeLog, modeAutoList, modeAutoInputs, modeAutoConfirm,
-		modeEditMenu, modeEditLine, modeEditText, modeEditPriority, modeAssignee, modeCommentPick, modeCommentDelete, modeHelp:
+		modeEditMenu, modeEditLine, modeEditText, modeEditPriority, modeAssignee, modeCommentPick, modeCommentDelete, modeCreate, modeHelp:
 		screen = lipgloss.Place(m.w, m.h, lipgloss.Center, lipgloss.Center,
 			boxStyle(colPurple).Render(m.modalContent()),
 			lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(colBorder)))
@@ -1124,6 +1161,11 @@ func (m Model) hintLines() [][]string {
 	changeStatus, autos := i18n.T("changer le statut", "change status"), i18n.T("automatisations", "automations")
 	refresh := i18n.T("rafraîchir", "refresh")
 	switch {
+	case m.mode == modeCreate:
+		if m.sg.active && m.cr.focus == fDesc {
+			return [][]string{{hint("↑/↓", i18n.T("choisir", "choose")), hint("enter", i18n.T("insérer", "insert")), hint("esc", i18n.T("fermer la liste", "close the list"))}}
+		}
+		return [][]string{{hint("tab", next), hint("ctrl+s", i18n.T("créer", "create")), hint("esc", cancel)}}
 	case m.sg.active && (m.mode == modeComment || m.mode == modeEditText):
 		return [][]string{{hint("↑/↓", i18n.T("choisir", "choose")), hint("enter", i18n.T("insérer", "insert")), hint("esc", i18n.T("fermer la liste", "close the list"))}}
 	case m.mode == modeFilter:
@@ -1151,16 +1193,16 @@ func (m Model) hintLines() [][]string {
 	case m.view == viewDetail:
 		return [][]string{
 			{hint("↑/↓", i18n.T("défiler", "scroll")), hint("c", i18n.T("commenter", "comment")), hint("ctrl+s", send), hint("esc", back), hint("q", quit), hint("?", help)},
-			{hint("e", i18n.T("modifier", "edit")), hint("t", i18n.T("ajouter du temps", "add time")), hint("s", changeStatus), hint("x", autos), hint("a", i18n.T("m'assigner", "assign to me")), hint("u", i18n.T("désassigner", "unassign")), hint("o", jiraOpen), hint("r", i18n.T("recharger", "reload"))},
+			{hint("e", i18n.T("modifier", "edit")), hint("n", i18n.T("nouveau", "new")), hint("t", i18n.T("ajouter du temps", "add time")), hint("s", changeStatus), hint("x", autos), hint("a", i18n.T("m'assigner", "assign to me")), hint("u", i18n.T("désassigner", "unassign")), hint("o", jiraOpen), hint("r", i18n.T("recharger", "reload"))},
 		}
 	case m.view == viewBoard:
 		return [][]string{
-			{hint("←/→", i18n.T("colonne", "column")), hint("↑/↓", i18n.T("carte", "card")), hint("enter", i18n.T("ouvrir", "open")), hint("tab", i18n.T("liste", "list")), hint("q", quit), hint("?", help)},
+			{hint("←/→", i18n.T("colonne", "column")), hint("↑/↓", i18n.T("carte", "card")), hint("enter", i18n.T("ouvrir", "open")), hint("n", i18n.T("nouveau", "new")), hint("tab", i18n.T("liste", "list")), hint("q", quit), hint("?", help)},
 			{hint("H/L", i18n.T("déplacer le ticket", "move ticket")), hint("s", changeStatus), hint("x", autos), hint("b", "board"), hint("o", jiraOpen), hint("r", refresh)},
 		}
 	}
 	return [][]string{
-		{hint("↑/↓", nav), hint("enter", i18n.T("ouvrir", "open")), hint("/", i18n.T("filtrer", "filter")), hint("tab", "kanban"), hint("r", refresh), hint("q", quit), hint("?", help)},
+		{hint("↑/↓", nav), hint("enter", i18n.T("ouvrir", "open")), hint("n", i18n.T("nouveau", "new")), hint("/", i18n.T("filtrer", "filter")), hint("tab", "kanban"), hint("r", refresh), hint("q", quit), hint("?", help)},
 		{hint("m", mine), hint("O", open), hint("s", i18n.T("statut", "status")), hint("ctrl+j", "JQL"), hint("f", i18n.T("filtres", "filters")), hint("b", "board"), hint("x", "automation"), hint("o", "Jira")},
 	}
 }
@@ -1269,6 +1311,8 @@ func (m Model) modalContent() string {
 		sb.WriteString(m.autoContent())
 	case modeEditMenu, modeEditLine, modeEditText, modeEditPriority, modeAssignee, modeCommentPick, modeCommentDelete:
 		sb.WriteString(m.editContent())
+	case modeCreate:
+		sb.WriteString(m.createContent())
 	case modeHelp:
 		sb.WriteString(helpText())
 	}
@@ -1278,7 +1322,8 @@ func (m Model) modalContent() string {
 func helpText() string {
 	body := i18n.T(`
  Global   1 liste · 2 kanban · 3 détail · tab changer d'onglet
-          s changer le statut · o ouvrir dans Jira · b choisir un board
+          n nouveau ticket · s changer le statut · o ouvrir dans Jira
+          b choisir un board
           ? aide · q quitter
  Liste    ↑/↓ naviguer · enter ouvrir · / filtrer (texte) · r rafraîchir
           m assigné à moi/tous · O ouverts/tous · ctrl+j requête JQL
@@ -1291,7 +1336,8 @@ func helpText() string {
           u désassigner · r recharger · esc retour
 `, `
  Global   1 list · 2 kanban · 3 detail · tab switch tab
-          s change status · o open in Jira · b choose a board
+          n new ticket · s change status · o open in Jira
+          b choose a board
           ? help · q quit
  List     ↑/↓ navigate · enter open · / filter (text) · r refresh
           m assigned to me/all · O open/all · ctrl+j JQL query

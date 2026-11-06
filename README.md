@@ -112,6 +112,24 @@ always show the selected visibility. Each new comment starts again as `Client`.
 Existing comments show `[client]` or `[interne]` (nothing if Jira does not say,
 for example outside Service Management).
 
+## Creating a ticket
+
+`n` (from the list, the kanban or the detail) opens the creation form. `tab` / `shift+tab` move between the fields,
+`ctrl+s` creates the ticket from anywhere, `esc` cancels (a started draft asks for a confirmation first).
+
+- **Project**: `enter` opens a searchable list of the projects you can create issues in. The form starts on the
+  project of the open ticket, otherwise the last one used, otherwise the one of the tickets on screen.
+- **Type**: `←/→` cycles through the issue types Jira offers for that project. **Sub-tasks** are offered when the form
+  is opened from a ticket's detail: the parent is that ticket.
+- **Title** (required) and **Description** (Markdown, with the `@` people and `#` ticket pickers: the people are those
+  who can be assigned in the project).
+- **Priority** (`←/→`, the project's default when left empty), **Labels** and **Assignee** (`←/→`: *Automatic* = the
+  project's default assignee, or *Me*). A field Jira does not put on the form of this project or type is not shown.
+- After creation the new ticket opens in the detail view and the list is reloaded. If Jira refuses, the form stays open
+  with everything you typed and Jira's message.
+- **Required fields the app cannot fill** (custom fields, components…) are detected from Jira's create metadata
+  *before* sending: the form says which ones and refuses to send. `ctrl+o` opens Jira's own create page instead.
+
 ## Editing a ticket
 
 In the detail, `e` opens the edit menu: **title**, **description**, **priority**, **labels**, **assignee**,
@@ -167,7 +185,7 @@ Three tabs, as in the mockup: `1 Liste`, `2 Kanban`, `3 Détail` (last opened ti
 
 | View | Keys |
 |---|---|
-| Global | `1` `2` `3` / `tab` tabs · `s` change status · `o` open in Jira · `b` choose a board · `?` help · `q` quit |
+| Global | `1` `2` `3` / `tab` tabs · `n` new ticket · `s` change status · `o` open in Jira · `b` choose a board · `?` help · `q` quit |
 | List | `↑/↓` · `enter` open · `/` filter (text, live; `esc` clears) · `m` assigned me/everyone · `O` open/all · `ctrl+j` JQL query · `f` config filters · `r` reload |
 | Kanban | `←/→` column · `↑/↓` card · `enter` open · `H/L` move the ticket (transition) |
 | Detail | `↑/↓` scroll · `c` comment (`tab` client/internal, `ctrl+s` sends, `esc` cancels) · `e` edit the ticket · `t` add time (Tempo) · `a` assign to me · `u` unassign · `esc` back |

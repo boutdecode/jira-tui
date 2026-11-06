@@ -450,3 +450,143 @@ func (s *Service) BoardIssues(int) ([]jira.Issue, error) {
 }
 
 func (s *Service) BrowseURL(key string) string { return "https://example.atlassian.net/browse/" + key }
+
+// --- creating issues ---
+
+type deskType struct {
+	id, fr, en string
+	subtask    bool
+}
+
+type deskProject struct {
+	id, key, fr, en string
+	types           []deskType
+	required        []string // a required field the app cannot fill (shows the blocking message)
+}
+
+var demoProjects = []deskProject{
+	{id: "10001", key: "PAY", fr: "Paiements", en: "Payments", types: []deskType{
+		{"10", "Tâche", "Task", false}, {"11", "Bug", "Bug", false}, {"12", "Story", "Story", false}, {"13", "Sous-tâche", "Sub-task", true}}},
+	{id: "10002", key: "OPS", fr: "Exploitation", en: "Operations", types: []deskType{
+		{"20", "Tâche", "Task", false}, {"21", "Incident", "Incident", false}}},
+	{id: "10003", key: "WEB", fr: "Site web", en: "Website", types: []deskType{
+		{"30", "Tâche", "Task", false}, {"31", "Bug", "Bug", false}},
+		required: []string{"Environnement"}},
+}
+
+func (p deskProject) name() string { return i18n.T(p.fr, p.en) }
+
+func findProject(key string) *deskProject {
+	for i := range demoProjects {
+		if demoProjects[i].key == key {
+			return &demoProjects[i]
+		}
+	}
+	return nil
+}
+
+func (s *Service) Projects(query string) ([]jira.Project, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	var out []jira.Project
+	for _, p := range demoProjects {
+		if q == "" || strings.Contains(strings.ToLower(p.key+" "+p.name()), q) {
+			out = append(out, jira.Project{ID: p.id, Key: p.key, Name: p.name(), Type: "software"})
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) IssueTypes(project string) ([]jira.IssueType, error) {
+	p := findProject(project)
+	if p == nil {
+		return nil, fmt.Errorf(i18n.T("projet %s introuvable", "project %s not found"), project)
+	}
+	var out []jira.IssueType
+	for _, t := range p.types {
+		out = append(out, jira.IssueType{ID: t.id, Name: i18n.T(t.fr, t.en), Subtask: t.subtask})
+	}
+	return out, nil
+}
+
+func (s *Service) NewIssueMeta(project, typeID string) (jira.NewIssueMeta, error) {
+	p := findProject(project)
+	if p == nil {
+		return jira.NewIssueMeta{}, fmt.Errorf(i18n.T("projet %s introuvable", "project %s not found"), project)
+	}
+	meta := jira.NewIssueMeta{
+		HasPriority: true, HasLabels: true, HasDesc: true, HasAssignee: true,
+		Priorities: append([]jira.Named(nil), priorities...),
+	}
+	for _, f := range p.required {
+		meta.Unsupported = append(meta.Unsupported, i18n.T(f, "Environment"))
+	}
+	return meta, nil
+}
+
+func (s *Service) SearchProjectUsers(project, query string) ([]jira.User, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	var out []jira.User
+	for _, u := range users {
+		if strings.Contains(strings.ToLower(u), q) {
+			out = append(out, *user(u))
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) CreateIssue(in jira.NewIssue) (jira.IssueRef, error) {
+	p := findProject(in.ProjectKey)
+	if p == nil {
+		return jira.IssueRef{}, fmt.Errorf(i18n.T("projet %s introuvable", "project %s not found"), in.ProjectKey)
+	}
+	if strings.TrimSpace(in.Summary) == "" {
+		return jira.IssueRef{}, errors.New(i18n.T("summary : le résumé est obligatoire", "summary: the summary is required"))
+	}
+	typeName := ""
+	for _, t := range p.types {
+		if t.id == in.TypeID {
+			typeName = i18n.T(t.fr, t.en)
+			if t.subtask && in.ParentKey == "" {
+				return jira.IssueRef{}, errors.New(i18n.T("parent : une sous-tâche a besoin d'un parent", "parent: a sub-task needs a parent"))
+			}
+		}
+	}
+	if typeName == "" {
+		return jira.IssueRef{}, fmt.Errorf(i18n.T("type %s inconnu", "unknown issue type %s"), in.TypeID)
+	}
+	if len(p.required) > 0 {
+		return jira.IssueRef{}, fmt.Errorf("customfield_10050: %s", i18n.T("le champ est obligatoire", "the field is required"))
+	}
+	next := 0
+	for _, is := range s.issues {
+		if k, n, ok := strings.Cut(is.Key, "-"); ok && k == p.key {
+			if v, err := strconv.Atoi(n); err == nil {
+				next = max(next, v)
+			}
+		}
+	}
+	key := fmt.Sprintf("%s-%d", p.key, next+1)
+	now := time.Now().Format(layout)
+	f := jira.Fields{
+		Summary: in.Summary, Status: s.statuses[sTodo], IssueType: jira.Named{Name: typeName},
+		Reporter: user("Kevin"), Created: now, Updated: now, Labels: append([]string(nil), in.Labels...),
+	}
+	if in.Description != nil && len(docContent(*in.Description)) > 0 {
+		f.Description = *in.Description
+	}
+	if in.PriorityID != "" {
+		i := slices.IndexFunc(priorities, func(p jira.Named) bool { return p.ID == in.PriorityID })
+		if i < 0 {
+			return jira.IssueRef{}, fmt.Errorf(i18n.T("priorité %s inconnue", "unknown priority %s"), in.PriorityID)
+		}
+		pr := priorities[i]
+		f.Priority = &pr
+	}
+	if in.AssignToMe {
+		f.Assignee = user("Kevin")
+	}
+	s.issues = append([]jira.Issue{{ID: fmt.Sprint(IssueIDBase + len(s.issues)), Key: key, Fields: f}}, s.issues...)
+	return jira.IssueRef{Key: key, Summary: in.Summary}, nil
+}
+
+func docContent(d jira.Doc) []any { c, _ := d["content"].([]any); return c }

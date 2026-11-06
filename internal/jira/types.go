@@ -129,6 +129,16 @@ type Service interface {
 	SearchMentionable(key, query string) ([]User, error)
 	// SearchIssues returns issues matching query, the recent ones when it is empty (for "#").
 	SearchIssues(query string) ([]IssueRef, error)
+	// Projects lists the projects the user can create issues in.
+	Projects(query string) ([]Project, error)
+	// IssueTypes lists the issue types that can be created in a project.
+	IssueTypes(project string) ([]IssueType, error)
+	// NewIssueMeta describes the create form of a project and issue type.
+	NewIssueMeta(project, typeID string) (NewIssueMeta, error)
+	// CreateIssue creates an issue and returns its key.
+	CreateIssue(in NewIssue) (IssueRef, error)
+	// SearchProjectUsers lists the people that can be mentioned in an issue of the project.
+	SearchProjectUsers(project, query string) ([]User, error)
 	DeleteComment(key, commentID string) error
 	Boards() ([]Board, error)
 	BoardColumns(boardID int) ([]Column, error)
