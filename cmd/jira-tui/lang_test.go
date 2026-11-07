@@ -53,3 +53,38 @@ func TestVersion(t *testing.T) {
 		t.Errorf("--version with --output-json = %d", code)
 	}
 }
+
+func TestCommandsAreDispatched(t *testing.T) {
+	// a command word is not a ticket reference
+	code, stdout, stderr := runCLI("list", "--demo", "--limit", "2", "--output-json")
+	if code != 0 || !strings.Contains(stdout, `"key": "PAY-142"`) || stderr != "" {
+		t.Fatalf("list: %d\n%s\n%s", code, stdout, stderr)
+	}
+	code, stdout, stderr = runCLI("whoami", "--demo")
+	if code != 0 || !strings.HasPrefix(stdout, "Kevin\t") {
+		t.Errorf("whoami: %d %q %q", code, stdout, stderr)
+	}
+	code, stdout, _ = runCLI("transition", "PAY-142", "--demo", "--dry-run", "En revue")
+	if code != 0 || !strings.Contains(stdout, `"action": "transition"`) {
+		t.Errorf("dry-run: %d %q", code, stdout)
+	}
+	if code, _, stderr := runCLI("comment", "--demo"); code != 2 || !strings.Contains(stderr, "référence de ticket") {
+		t.Errorf("usage: %d %q", code, stderr)
+	}
+	// the ways of calling the program before the commands existed are untouched
+	for _, args := range [][]string{{"PAY-142", "--demo", "--output-json"}, {"--demo", "pay-142", "--output-json"}} {
+		if code, stdout, _ := runCLI(args...); code != 0 || !strings.Contains(stdout, `"key": "PAY-142"`) {
+			t.Errorf("%v: %d %q", args, code, stdout)
+		}
+	}
+	if code, _, _ := runCLI("not-a-command"); code != 2 {
+		t.Errorf("an unknown word is still a usage error, got %d", code)
+	}
+	// the main help lists the commands
+	_, stdout, _ = runCLI("-h")
+	for _, want := range []string{"list", "comment", "transition", "assign", "create", "log", "auto", "completion"} {
+		if !strings.Contains(stdout, "  "+want) {
+			t.Errorf("-h misses the command %q:\n%s", want, stdout)
+		}
+	}
+}

@@ -70,6 +70,42 @@ To force a language whatever the locale, set `JIRA_TUI_LANG=fr` or `JIRA_TUI_LAN
 Inputs are understood in both languages (`hier` / `yesterday`, `1j` / `1d`). The JSON output of `--output-json`
 and the config file keys are the same in both languages.
 
+## Commands for scripts
+
+Without opening the interface, `jira-tui <command>` does one thing and exits. Commands never prompt: everything comes
+from arguments, options or standard input. Results go to **stdout** (tab-separated text, or JSON with `--output-json`),
+errors to **stderr**. Exit codes: `0` ok · `1` failure (network, authentication, not found, ambiguous choice, required
+field the app cannot fill) · `2` usage. `--demo` works everywhere (fake data), `jira-tui <command> -h` shows the options.
+
+| Command | What it does |
+|---|---|
+| `list [JQL]` | List issues: a JQL query, `--filter NAME` (a filter of the config), or `--mine` / `--open`; `--limit N` |
+| `show TICKET` | Show an issue (fields, description, comments, Tempo time); `--output-json` is the export described above |
+| `comment TICKET [TEXT\|-]` | Add a comment in Markdown. `-` or a pipe reads standard input, `--file PATH` a file, `--mention NAME` activates `@Name` |
+| `transition TICKET [STATUS]` | Change the status by the name of the transition or of the target status (a unique prefix is enough); without a status, or with `--list`, show the possible transitions |
+| `assign TICKET WHO` | `me`, `none`, or a name (the person must be assignable; an ambiguous name is refused, with the candidates) |
+| `edit TICKET` | `--title`, `--description` (Markdown, `-` = stdin, empty = clear), `--priority`, `--label` / `--add-label` / `--remove-label` |
+| `create` | `--project`, `--type`, `--title`, `--description`, `--priority`, `--label`, `--assign me`, `--parent` (sub-task), `--mention`; prints the key and the URL |
+| `log TICKET DURATION` | Log time in Tempo: `--date` (`yesterday`, `04/11`, `2026-11-04`), `--description`; `1h30`, `45m`, `2d`… |
+| `auto TICKET [RULE]` | List (`--list`) or run a manual automation, `--input name=value` for its inputs |
+| `whoami` | Check the credentials: prints the user and the site |
+| `completion bash\|zsh\|fish` | Shell completion, e.g. `source <(jira-tui completion zsh)` |
+
+Every command that writes accepts **`--dry-run`**: it checks everything (the ticket, the transition, the people, the
+create metadata…) and prints, as JSON, what would be sent, without writing anything.
+
+    jira-tui list --mine --open --output-json | jq -r '.[].key'
+    jira-tui transition PAY-142 "En revue"
+    git log -1 --pretty=%B | jira-tui comment PAY-142 --internal
+    jira-tui create --project PAY --type Bug --title "Crash 3DS" --description - < notes.md
+    jira-tui log PAY-142 1h30 --date yesterday --description "review"
+
+**A comment is visible to the customer by default**, like in the interface (JSM projects): use `--internal` to keep it
+to the team. The confirmation always says which one it was. Markdown, `#PAY-1` smart links, `--mention` and the rule
+"nothing is ever lost" (`edit --description` refuses to replace a description with images, tables… unless `--force`) are
+the same as in the interface. `create` checks the type, the priority and Jira's required fields before sending anything.
+There is no command to delete or edit a comment: those stay in the interface.
+
 ## Configuration
 
 On first launch, with no environment variables and no config file, the app shows a form

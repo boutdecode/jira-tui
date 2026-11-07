@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/kevin/jira-tui/internal/cli"
 	"github.com/kevin/jira-tui/internal/export"
 	"github.com/kevin/jira-tui/internal/i18n"
 )
@@ -74,6 +75,11 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, i18n.T("Options :", "Options:"))
 	fs.PrintDefaults()
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, i18n.T("Commandes (sans interface, pour les scripts ; « jira-tui COMMANDE -h » pour le détail) :", "Commands (no UI, for scripts; “jira-tui COMMAND -h” for details):"))
+	for _, c := range cli.Summaries() {
+		fmt.Fprintf(w, "  %-11s %s\n", c[0], c[1])
+	}
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, i18n.T("Codes de sortie : 0 ok · 1 erreur (réseau, config, ticket introuvable) · 2 usage", "Exit codes: 0 ok · 1 error (network, config, ticket not found) · 2 usage"))
 }

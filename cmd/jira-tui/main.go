@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/kevin/jira-tui/internal/automation"
+	"github.com/kevin/jira-tui/internal/cli"
 	"github.com/kevin/jira-tui/internal/config"
 	"github.com/kevin/jira-tui/internal/export"
 	"github.com/kevin/jira-tui/internal/i18n"
@@ -33,6 +34,10 @@ func errLabel() string { return i18n.T("erreur:", "error:") }
 
 // run returns the exit code: 0 ok, 1 error, 2 usage.
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && cli.IsCommand(args[0]) { // jira-tui comment PAY-142 "…", jira-tui list…
+		env := cli.IO{Stdin: os.Stdin, StdinIsTTY: isTerminal(os.Stdin), Stdout: stdout, Stderr: stderr}
+		return cli.Run(args, env, commandDeps(stderr))
+	}
 	o, err := parseArgs(args)
 	if errors.Is(err, flag.ErrHelp) {
 		printUsage(stdout)
@@ -56,6 +61,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runJSON(o, cfg, stdout, stderr)
 	}
 	return runTUI(o, cfg, stderr)
+}
+
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// commandDeps builds what the non-interactive commands need, once their options are known.
+func commandDeps(stderr io.Writer) cli.Builder {
+	return func(configPath string, demo bool) (cli.Deps, error) {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return cli.Deps{}, err
+		}
+		if !demo {
+			if err := cfg.Validate(); err != nil {
+				return cli.Deps{}, err
+			}
+		}
+		jira.Notify = func(wait time.Duration, attempt int) {
+			fmt.Fprintf(stderr, i18n.T("limite de Jira atteinte — nouvelle tentative dans %s (%d/3)\n", "Jira rate limit reached — retrying in %s (%d/3)\n"), wait.Round(time.Second), attempt)
+		}
+		svc, tsvc, asvc := services(options{config: configPath, demo: demo}, cfg)
+		return cli.Deps{Svc: svc, Time: tsvc, Auto: asvc, Config: cfg}, nil
+	}
 }
 
 // services builds the Jira, Tempo (nil unless configured) and Automation clients.
