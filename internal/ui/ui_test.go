@@ -251,6 +251,32 @@ func TestTransparent(t *testing.T) {
 	}
 }
 
+func TestPaintBackground(t *testing.T) {
+	out := paintBackground("a\x1b[31mb\x1b[0mc\n\x1b[49mx", 6, 3, colFg, colBg)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want 3 lines, got %d", len(lines))
+	}
+	for i, l := range lines {
+		if w := ansi.StringWidth(l); w != 6 {
+			t.Errorf("line %d width %d, want 6", i, w)
+		}
+		if !strings.HasPrefix(l, "\x1b[38;2;230;225;240;48;2;21;18;31m") {
+			t.Errorf("line %d lacks the background prefix", i)
+		}
+	}
+	if strings.Contains(out, "\x1b[49m") {
+		t.Error("default-background reset must be replaced")
+	}
+	if !strings.Contains(m0View(t), "48;2;21;18;31") {
+		t.Error("default view must paint the palette background")
+	}
+}
+
+func m0View(t *testing.T) string {
+	return demo(t, 100, 30).View().Content
+}
+
 func TestFooterShortcuts(t *testing.T) {
 	m := demo(t, 130, 34)
 	out := view(m)

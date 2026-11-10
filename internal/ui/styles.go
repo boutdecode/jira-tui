@@ -31,6 +31,42 @@ var (
 	colDark    = lipgloss.Color("#15121f")
 )
 
+// sgrColors returns the SGR sequence selecting fg and bg as truecolor.
+func sgrColors(fg, bg color.Color) string {
+	rgb := func(c color.Color) (uint32, uint32, uint32) {
+		r, g, b, _ := c.RGBA()
+		return r >> 8, g >> 8, b >> 8
+	}
+	fr, fgc, fb := rgb(fg)
+	br, bgc, bb := rgb(bg)
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%d;48;2;%d;%d;%dm", fr, fgc, fb, br, bgc, bb)
+}
+
+// paintBackground fills the whole w×h area with bg: every line is padded to w,
+// missing lines are added, and the background is re-applied after each reset
+// so that styled segments never expose the terminal's own background.
+func paintBackground(s string, w, h int, fg, bg color.Color) string {
+	if w <= 0 || h <= 0 {
+		return s
+	}
+	on := sgrColors(fg, bg)
+	bgOnly := "\x1b[48;2;" + strings.TrimSuffix(strings.SplitN(on, "48;2;", 2)[1], "m") + "m"
+	lines := strings.Split(s, "\n")
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	for i, l := range lines {
+		if wd := ansi.StringWidth(l); wd < w {
+			l += strings.Repeat(" ", w-wd)
+		}
+		l = strings.ReplaceAll(l, "\x1b[0m", "\x1b[0m"+on)
+		l = strings.ReplaceAll(l, "\x1b[m", "\x1b[m"+on)
+		l = strings.ReplaceAll(l, "\x1b[49m", bgOnly)
+		lines[i] = on + l + "\x1b[0m"
+	}
+	return strings.Join(lines, "\n")
+}
+
 // paint builds styles that all carry the same background (nil = none), so that
 // a highlighted row/card keeps its background across differently colored segments.
 type paint struct{ bg color.Color }

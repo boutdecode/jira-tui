@@ -208,7 +208,7 @@ func (s Setup) View() tea.View {
 	if s.w > 0 {
 		out = lipgloss.Place(s.w, s.h, lipgloss.Center, lipgloss.Center, out)
 	}
-	v := tea.NewView(fmt.Sprint(out))
+	v := tea.NewView(paintBackground(fmt.Sprint(out), s.w, s.h, colFg, colBg))
 	v.AltScreen = true
 	v.BackgroundColor = colBg
 	v.ForegroundColor = colFg

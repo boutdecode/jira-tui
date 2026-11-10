@@ -1109,6 +1109,9 @@ func (m Model) View() tea.View {
 			lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Foreground(colBorder)))
 	}
 	screen = lipgloss.NewStyle().Padding(m.my, m.mx).Render(screen)
+	if !m.transparent {
+		screen = paintBackground(screen, m.w, m.h, colFg, colBg)
+	}
 	v := tea.NewView(screen)
 	v.AltScreen = true
 	if !m.transparent {
