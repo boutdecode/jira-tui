@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -170,7 +171,9 @@ func renderDetail(is jira.Issue, width int, tv timeView) string {
 
 	sb.WriteString("\n" + timeSection(tv, f.OriginalEstimate, width))
 
-	cs := f.Comment.Comments
+	// Newest first (copy: the edit pickers rely on the original order).
+	cs := slices.Clone(f.Comment.Comments)
+	slices.Reverse(cs)
 	if is.CommentsErr != "" {
 		sb.WriteString("\n" + section(i18n.T("Commentaires", "Comments"), width) + "\n" + txt(colPink, i18n.T("Commentaires indisponibles : ", "Comments unavailable: ")+ansi.Truncate(is.CommentsErr, max(width-30, 10), "…")))
 		return strings.TrimRight(sb.String(), "\n")
